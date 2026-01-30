@@ -47,8 +47,14 @@ func main() {
 		Stats:      stats,
 	})
 
+	// Enter alternate screen buffer (like top/vim)
+	lib.EnterAltScreen(os.Stdout)
+	defer lib.ExitAltScreen(os.Stdout)
+
 	// Start display goroutine
+	displayDone := make(chan struct{})
 	go func() {
+		defer close(displayDone)
 		ticker := time.NewTicker(*refresh)
 		defer ticker.Stop()
 
@@ -70,15 +76,20 @@ func main() {
 	logger.Info("starting NDP listener", "listen", *listenAddr, "iface", *ifaceName, "window", *window, "refresh", *refresh)
 
 	if err := l.Run(ctx); err != nil {
+		// Wait for display goroutine to finish
+		<-displayDone
+
 		// If ctx canceled, treat as normal shutdown.
 		if ctx.Err() != nil {
-			logger.Info("listener stopped", "reason", "context canceled")
-			time.Sleep(50 * time.Millisecond) // allow final logs to flush in some envs
 			return
 		}
+		lib.ExitAltScreen(os.Stdout) // Restore terminal before printing error
 		logger.Error("listener error", "err", err)
 		os.Exit(1)
 	}
+
+	// Wait for display goroutine to finish
+	<-displayDone
 }
 
 func parseLogLevel(s string) slog.Level {

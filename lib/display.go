@@ -7,14 +7,24 @@ import (
 	"time"
 )
 
+// ANSI escape sequences for terminal control
+const (
+	enterAltScreen = "\033[?1049h" // Switch to alternate screen buffer
+	exitAltScreen  = "\033[?1049l" // Return to main screen buffer
+	cursorHome     = "\033[H"      // Move cursor to top-left
+	clearToEnd     = "\033[J"      // Clear from cursor to end of screen
+	hideCursor     = "\033[?25l"   // Hide cursor
+	showCursor     = "\033[?25h"   // Show cursor
+)
+
 // NDP message type short names for table columns
 var ndpShortNames = map[string]string{
-	"router_solicitation":           "RS",
-	"router_advertisement":          "RA",
-	"neighbor_solicitation":         "NS",
-	"neighbor_advertisement":        "NA",
-	"redirect":                      "Redir",
-	"duplicate_address_request":     "DAR",
+	"router_solicitation":            "RS",
+	"router_advertisement":           "RA",
+	"neighbor_solicitation":          "NS",
+	"neighbor_advertisement":         "NA",
+	"redirect":                       "Redir",
+	"duplicate_address_request":      "DAR",
 	"duplicate_address_confirmation": "DAC",
 }
 
@@ -29,30 +39,39 @@ var ndpColumnOrder = []string{
 	"duplicate_address_confirmation",
 }
 
-// RenderTable renders the stats table to the given writer.
-// It clears the screen and positions the cursor at the top.
-func RenderTable(w io.Writer, stats []PeerSummary, window time.Duration) {
-	// ANSI escape codes
-	clearScreen := "\033[2J"
-	moveCursor := "\033[H"
+// EnterAltScreen switches to the alternate screen buffer (like top/vim).
+// Call ExitAltScreen when done to restore the original terminal.
+func EnterAltScreen(w io.Writer) {
+	fmt.Fprint(w, enterAltScreen, hideCursor)
+}
 
-	fmt.Fprint(w, clearScreen, moveCursor)
+// ExitAltScreen returns to the main screen buffer and restores cursor.
+func ExitAltScreen(w io.Writer) {
+	fmt.Fprint(w, showCursor, exitAltScreen)
+}
+
+// RenderTable renders the stats table to the given writer.
+// It moves the cursor home and redraws in place.
+func RenderTable(w io.Writer, stats []PeerSummary, window time.Duration) {
+	// Move cursor to top-left, then draw content
+	fmt.Fprint(w, cursorHome)
 
 	// Header
 	fmt.Fprintf(w, "NDP Statistics (window: %s, updated: %s)\n",
 		formatDuration(window),
 		time.Now().Format("15:04:05"))
-	fmt.Fprintln(w, strings.Repeat("─", 120))
+	fmt.Fprintln(w, strings.Repeat("─", 100))
 
 	if len(stats) == 0 {
 		fmt.Fprintln(w, "No NDP traffic observed yet...")
+		fmt.Fprint(w, clearToEnd)
 		return
 	}
 
 	// Table header
 	fmt.Fprintf(w, "%-40s %5s %5s %5s %5s %5s %5s %5s %6s  %-10s  %-10s\n",
 		"IPv6 Address", "RS", "RA", "NS", "NA", "Redir", "DAR", "DAC", "Total", "First Seen", "Last Seen")
-	fmt.Fprintln(w, strings.Repeat("─", 120))
+	fmt.Fprintln(w, strings.Repeat("─", 100))
 
 	// Table rows
 	for _, peer := range stats {
@@ -71,8 +90,13 @@ func RenderTable(w io.Writer, stats []PeerSummary, window time.Duration) {
 		)
 	}
 
-	fmt.Fprintln(w, strings.Repeat("─", 120))
+	fmt.Fprintln(w, strings.Repeat("─", 100))
 	fmt.Fprintf(w, "Total peers: %d\n", len(stats))
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Press Ctrl+C to exit")
+
+	// Clear any leftover content from previous renders (e.g., if peer count decreased)
+	fmt.Fprint(w, clearToEnd)
 }
 
 func truncate(s string, maxLen int) string {
