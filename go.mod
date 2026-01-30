@@ -1,4 +1,4 @@
-module NDPeer
+module NDPeekr
 
 go 1.24.9
 
