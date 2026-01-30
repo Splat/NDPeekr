@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-// NDPStats tracks all observed NDP peers with thread-safe access.
+// NDPStats tracks all observed NDP peers with thread-safe access
 type NDPStats struct {
 	mu     sync.RWMutex
 	peers  map[string]*PeerStats // key: IPv6 address string
-	window time.Duration         // sliding window size
+	window time.Duration         // sliding window size (timeout)
 }
 
-// PeerStats holds per-peer statistics.
+// PeerStats holds per-peer statistics
 type PeerStats struct {
 	FirstSeen time.Time
 	LastSeen  time.Time
@@ -21,7 +21,7 @@ type PeerStats struct {
 	Messages map[string][]time.Time // key: ndpKind, value: timestamps
 }
 
-// PeerSummary is a snapshot of peer stats for display.
+// PeerSummary is a snapshot of peer stats for display
 type PeerSummary struct {
 	Address   string
 	FirstSeen time.Time

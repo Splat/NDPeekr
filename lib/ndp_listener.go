@@ -16,6 +16,7 @@ type NDPListenerConfig struct {
 	ListenAddr string       // e.g. "::"
 	Interface  string       // optional; best-effort restriction by ifindex (requires control msgs)
 	Logger     *slog.Logger // required
+	Stats      *NDPStats    // optional; if set, records messages instead of logging
 }
 
 type NDPListener struct {
@@ -143,9 +144,12 @@ func (l *NDPListener) Run(ctx context.Context) error {
 			}
 		}
 
-		// log the fields for the NDP message
-		l.cfg.Logger.Info("ndp event", fields...)
-		// TODO: create a running tally of sr ips, ts, intervals per msg type.
+		// Record to stats if configured, otherwise log
+		if l.cfg.Stats != nil {
+			l.cfg.Stats.RecordMessage(srcIP, ndpKind)
+		} else {
+			l.cfg.Logger.Info("ndp event", fields...)
+		}
 	}
 }
 
