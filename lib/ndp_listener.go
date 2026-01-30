@@ -39,6 +39,7 @@ func NewNDPListener(cfg NDPListenerConfig) *NDPListener {
 // - Requires elevated privileges (root/CAP_NET_RAW) for "ip6:ipv6-icmp".
 // - Interface restriction is best-effort; we filter using the received IfIndex control message.
 // - If you later want strict NDP validity, enforce HopLimit == 255 before accepting events.
+// - -- TODO: Add hop limit as a cli parameter
 func (l *NDPListener) Run(ctx context.Context) error {
 	// ICMPv6 socket (datagram-style, not net.Conn).
 	pc, err := icmp.ListenPacket("ip6:ipv6-icmp", l.cfg.ListenAddr)
@@ -58,7 +59,7 @@ func (l *NDPListener) Run(ctx context.Context) error {
 		l.cfg.Logger.Warn("failed to enable ipv6 control messages; continuing", "err", err)
 	}
 
-	// Resolve requested interface (if any).
+	// Resolve the requested interface if any
 	var wantIfIndex int
 	if l.cfg.Interface != "" {
 		ifi, e := net.InterfaceByName(l.cfg.Interface)
@@ -72,7 +73,7 @@ func (l *NDPListener) Run(ctx context.Context) error {
 
 	buf := make([]byte, 64*1024)
 
-	// Use deadlines so ctx cancellation is honored promptly.
+	// Use deadlines so ctx cancellation is honored promptly
 	const readTimeout = 800 * time.Millisecond
 
 	for {
@@ -99,14 +100,14 @@ func (l *NDPListener) Run(ctx context.Context) error {
 
 		srcIP := ipFromAddr(src)
 
-		// Best-effort interface restriction (requires cm.IfIndex).
+		// Best-effort interface restriction (requires cm.IfIndex)
 		if wantIfIndex != 0 {
 			if cm == nil || cm.IfIndex != wantIfIndex {
 				continue
 			}
 		}
 
-		// Parse ICMPv6 message bytes.
+		// Parse ICMPv6 message bytes
 		msg, perr := icmp.ParseMessage(ipv6.ICMPTypeEchoReply.Protocol(), buf[:n])
 		if perr != nil {
 			l.cfg.Logger.Warn("failed to parse icmpv6", "src", srcIP, "len", n, "err", perr)
@@ -115,7 +116,7 @@ func (l *NDPListener) Run(ctx context.Context) error {
 
 		ndpKind := classifyICMPv6(msg.Type)
 		if ndpKind == "" {
-			// Not an NDP ICMPv6 type; ignore by default.
+			// Not an NDP ICMPv6 type; ignore by default
 			continue
 		}
 

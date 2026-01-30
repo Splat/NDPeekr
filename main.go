@@ -1,7 +1,7 @@
 package main
 
 import (
-	"NDPeer/lib"
+	"NDPeekr/lib"
 	"context"
 	"flag"
 	"log/slog"
