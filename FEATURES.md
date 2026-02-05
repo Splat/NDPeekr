@@ -2,6 +2,8 @@
 
 This document outlines planned features to evolve NDPeekr from a simple NDP monitor into a comprehensive IPv6 asset discovery and tracking suite.
 
+NDPeeker was a quick illustration of what is possible. However, as enumerated in some my articles on IPv6 there is a plethora of ways we can built something more comprehensive with what already exists in the noise.
+
 ---
 
 ## Current Capabilities
@@ -21,7 +23,7 @@ This document outlines planned features to evolve NDPeekr from a simple NDP moni
 **Complexity:** Low
 **Status:** Ready to implement
 
-NDP Neighbor Solicitation and Neighbor Advertisement messages contain a Source/Target Link-Layer Address option that carries the MAC address. This is the IPv6 equivalent of ARP.
+NDP Neighbor Solicitation and Neighbor Advertisement messages contain a Source/Target Link-Layer Address option that carries the MAC address. This is the IPv6 equivalent of ARP. This is interesting for a few reasons. We can track hosts leaving and re-entering a network via the MAC address and also build a list of more concrete host to IP assigment for more permanent appliances. These are usually the more interesting things to look at for researchers anyways. 
 
 **Implementation:**
 - Parse ICMPv6 options in NS/NA messages
@@ -392,12 +394,46 @@ Infer operating system from NDP behavior patterns.
 
 ---
 
+### 14. MLD Support
+
+**Priority:** High
+**Complexity:** Low
+**Status:** Future / v2.0
+
+MLD (Multicast Listener Discovery) is IPv6's mechanism for hosts to tell routers "I want to receive traffic for this multicast group." It's the IPv6 equivalent of IGMP in v4.
+
+How it works on the wire:
+
+- A router periodically sends a Multicast Listener Query (ICMPv6 type 130) asking "who's listening to what?"
+- Hosts respond with a Multicast Listener Report (type 131 for MLDv1, type 143 for MLDv2) declaring which multicast groups they've joined
+- When a host leaves a group, it sends a Multicast Listener Done (type 132)
+
+All of this is ICMPv6 with the same protocol family the listener already has a raw socket open for. You're currently seeing these packets and throwing them away in classifyICMPv6().
+
+Why it's valuable for NDPeekr:
+
+The multicast groups a host joins are a fingerprint of what services it's running. These are well-known group addresses with direct meaning:
+
+| Multicast Group   | What It Means                                                                           |
+|-------------------|-----------------------------------------------------------------------------------------|
+| ff02::fb          | mDNS — the host runs Bonjour/Avahi (macOS, Linux with avahi, Chromecasts, printers)     |
+| ff02::1:3         | LLMNR — almost always Windows                                                           |
+| ff02::c           | SSDP/UPnP — device discovery (smart home devices, media servers)                        |
+| ff02::2           | All-Routers — the host is acting as a router                                            |
+| ff02::16          | MLDv2-capable nodes                                                                     |
+| ff02::1:ffXX:XXXX | Solicited-node multicast — tied to a specific unicast address (used for NDP resolution) |
+
+So passively listening to MLD tells you not just that a host exists (which you already know from NDP), but what it's doing. A host joining `ff02::fb` and `ff02::1:3` is likely a Windows machine with mDNS enabled. One joining only `ff02::fb` is likely macOS or Linux. This feeds directly into the OS fingerprinting goal without any active probing.
+
+It also reveals devices that might be quiet on NDP but chatty on multicast such as IoT devices that primarily communicate via mDNS.
+
 ## Implementation Priority
 
 ### Phase 1: Core Enhancements
 1. MAC Address Extraction from NDP
 2. Router Tracking Table
 3. JSON Export
+4. MLD
 
 ### Phase 2: Protocol Expansion
 4. mDNS Monitoring
