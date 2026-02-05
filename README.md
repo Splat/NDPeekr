@@ -96,13 +96,13 @@ sudo ./NDPeekr --iface en0 --window 10m --refresh 1s --log-level info
 
 ## Command Line Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--listen` | `::` | IPv6 address to bind |
-| `--iface` | (all) | Interface name to restrict capture (best-effort) |
-| `--window` | `15m` | Sliding window duration for statistics |
-| `--refresh` | `2s` | Table refresh interval |
-| `--log-level` | `info` | Log verbosity: debug, info, warn, error |
+| Flag          | Default | Description                                      |
+|---------------|---------|--------------------------------------------------|
+| `--listen`    | `::`    | IPv6 address to bind                             |
+| `--iface`     | (all)   | Interface name to restrict capture (best-effort) |
+| `--window`    | `15m`   | Sliding window duration for statistics           |
+| `--refresh`   | `2s`    | Table refresh interval                           |
+| `--log-level` | `info`  | Log verbosity: debug, info, warn, error          |
 
 ## Output
 
