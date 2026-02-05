@@ -1,4 +1,5 @@
 # NDPeekr
+![NDPPeekr](ndpeekr_logo.png)
 
 A lightweight Go tool for passive IPv6 network discovery through NDP (Neighbor Discovery Protocol) traffic monitoring. NDPeekr captures and aggregates NDP messages to build a real-time inventory of active IPv6 hosts on your network segment.
 
