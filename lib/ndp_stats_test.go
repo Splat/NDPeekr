@@ -173,6 +173,74 @@ func TestPrune_KeepsRecentMessages(t *testing.T) {
 	}
 }
 
+func TestRecordMLDMembership(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	stats.RecordMessage("fe80::1", "mld_report")
+	stats.RecordMLDMembership("fe80::1", "ff02::fb")
+	stats.RecordMLDMembership("fe80::1", "ff02::1:3")
+
+	summaries := stats.GetStats()
+	if len(summaries) != 1 {
+		t.Fatalf("GetStats() returned %d peers, want 1", len(summaries))
+	}
+	if len(summaries[0].Groups) != 2 {
+		t.Fatalf("Groups = %v, want 2 groups", summaries[0].Groups)
+	}
+	// Groups should be sorted
+	if summaries[0].Groups[0] != "ff02::1:3" || summaries[0].Groups[1] != "ff02::fb" {
+		t.Errorf("Groups = %v, want [ff02::1:3, ff02::fb]", summaries[0].Groups)
+	}
+}
+
+func TestRecordMLDMembership_MultipleHosts(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	stats.RecordMessage("fe80::1", "mld_report")
+	stats.RecordMLDMembership("fe80::1", "ff02::fb")
+	stats.RecordMessage("fe80::2", "mld_report")
+	stats.RecordMLDMembership("fe80::2", "ff02::fb")
+	stats.RecordMLDMembership("fe80::2", "ff02::c")
+
+	summaries := stats.GetStats()
+	if len(summaries) != 2 {
+		t.Fatalf("GetStats() returned %d peers, want 2", len(summaries))
+	}
+	// Both should have ff02::fb
+	for _, s := range summaries {
+		found := false
+		for _, g := range s.Groups {
+			if g == "ff02::fb" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("peer %s missing ff02::fb group", s.Address)
+		}
+	}
+}
+
+func TestPruneMLDMemberships(t *testing.T) {
+	stats := NewNDPStats(100 * time.Millisecond)
+
+	stats.RecordMessage("fe80::1", "mld_report")
+	stats.RecordMLDMembership("fe80::1", "ff02::fb")
+
+	summaries := stats.GetStats()
+	if len(summaries[0].Groups) != 1 {
+		t.Fatalf("Initial groups = %d, want 1", len(summaries[0].Groups))
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	stats.Prune()
+
+	// Peer should be removed entirely (no messages in window)
+	summaries = stats.GetStats()
+	if len(summaries) != 0 {
+		t.Errorf("After prune, got %d peers, want 0", len(summaries))
+	}
+}
+
 func TestFirstSeenLastSeen(t *testing.T) {
 	stats := NewNDPStats(5 * time.Minute)
 

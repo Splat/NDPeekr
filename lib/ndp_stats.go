@@ -19,6 +19,9 @@ type PeerStats struct {
 	LastSeen  time.Time
 	// Messages stores timestamps for each message type for windowed counting.
 	Messages map[string][]time.Time // key: ndpKind, value: timestamps
+	// Groups tracks multicast group memberships from MLD reports.
+	// key: multicast group address, value: last report time.
+	Groups map[string]time.Time
 }
 
 // PeerSummary is a snapshot of peer stats for display
@@ -28,6 +31,7 @@ type PeerSummary struct {
 	LastSeen  time.Time
 	Counts    map[string]int // message type -> count within window
 	Total     int
+	Groups    []string // multicast groups this peer has joined
 }
 
 // NewNDPStats creates a new NDPStats tracker with the given sliding window duration.
@@ -38,24 +42,40 @@ func NewNDPStats(window time.Duration) *NDPStats {
 	}
 }
 
-// RecordMessage records an NDP message from the given IP address.
+// RecordMessage records an NDP/MLD message from the given IP address.
 func (s *NDPStats) RecordMessage(ip string, ndpKind string) {
 	now := time.Now()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	peer := s.getOrCreatePeer(ip, now)
+	peer.LastSeen = now
+	peer.Messages[ndpKind] = append(peer.Messages[ndpKind], now)
+}
+
+// RecordMLDMembership records that a peer has reported membership in a multicast group.
+func (s *NDPStats) RecordMLDMembership(ip string, group string) {
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	peer := s.getOrCreatePeer(ip, now)
+	peer.Groups[group] = now
+}
+
+func (s *NDPStats) getOrCreatePeer(ip string, now time.Time) *PeerStats {
 	peer, ok := s.peers[ip]
 	if !ok {
 		peer = &PeerStats{
 			FirstSeen: now,
 			Messages:  make(map[string][]time.Time),
+			Groups:    make(map[string]time.Time),
 		}
 		s.peers[ip] = peer
 	}
-
-	peer.LastSeen = now
-	peer.Messages[ndpKind] = append(peer.Messages[ndpKind], now)
+	return peer
 }
 
 // GetStats returns a sorted list of peer summaries for display.
@@ -86,6 +106,14 @@ func (s *NDPStats) GetStats() []PeerSummary {
 			summary.Counts[kind] = count
 			summary.Total += count
 		}
+
+		// Collect multicast group memberships reported within the window
+		for group, lastSeen := range peer.Groups {
+			if lastSeen.After(cutoff) {
+				summary.Groups = append(summary.Groups, group)
+			}
+		}
+		sort.Strings(summary.Groups)
 
 		summaries = append(summaries, summary)
 	}
@@ -121,6 +149,13 @@ func (s *NDPStats) Prune() {
 				totalKept += len(kept)
 			} else {
 				delete(peer.Messages, kind)
+			}
+		}
+
+		// Prune stale group memberships
+		for group, lastSeen := range peer.Groups {
+			if !lastSeen.After(cutoff) {
+				delete(peer.Groups, group)
 			}
 		}
 
