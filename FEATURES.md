@@ -394,8 +394,8 @@ Infer operating system from NDP behavior patterns.
 
 ---
 
-### 14. MLD Support
-
+### 14. MLD Support (IMPLEMENTED IN PR #10)
+```
 **Priority:** High
 **Complexity:** Low
 **Status:** Future / v2.0
@@ -426,6 +426,7 @@ The multicast groups a host joins are a fingerprint of what services it's runnin
 So passively listening to MLD tells you not just that a host exists (which you already know from NDP), but what it's doing. A host joining `ff02::fb` and `ff02::1:3` is likely a Windows machine with mDNS enabled. One joining only `ff02::fb` is likely macOS or Linux. This feeds directly into the OS fingerprinting goal without any active probing.
 
 It also reveals devices that might be quiet on NDP but chatty on multicast such as IoT devices that primarily communicate via mDNS.
+```
 
 ## Implementation Priority
 
