@@ -8,7 +8,7 @@ NDPeeker was a quick illustration of what is possible. However, as enumerated in
 
 ## Current Capabilities
 
-- Passive NDP message capture (RS, RA, NS, NA, Redirect, DAD)
+- Passive NDP message capture (RS, RA, NS, NA, Redirect, DAD, MLD support)
 - Per-address message counting with sliding time window
 - Real-time terminal display with automatic pruning
 - Interface filtering
