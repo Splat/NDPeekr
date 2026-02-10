@@ -150,6 +150,18 @@ func (l *NDPListener) Run(ctx context.Context) error {
 		if l.cfg.Stats != nil {
 			l.cfg.Stats.RecordMessage(srcIP, ndpKind)
 
+			// Extract link-layer (MAC) address from NDP options
+			var mac string
+			switch ndpKind {
+			case "router_solicitation", "router_advertisement", "neighbor_solicitation":
+				mac = parseLinkLayerAddr(buf[:n], 1) // Source Link-Layer Address
+			case "neighbor_advertisement":
+				mac = parseLinkLayerAddr(buf[:n], 2) // Target Link-Layer Address
+			}
+			if mac != "" {
+				l.cfg.Stats.RecordMAC(srcIP, mac)
+			}
+
 			// Extract multicast group addresses from MLD reports/done
 			if ndpKind == "mld_report" || ndpKind == "mld_done" {
 				for _, group := range parseMLDGroups(buf[:n]) {
@@ -221,6 +233,65 @@ func classifyICMPv6(t icmp.Type) string {
 	default:
 		return ""
 	}
+}
+
+// ndpOptionsOffset returns the byte offset where NDP options begin for a given
+// ICMPv6 message type, or -1 if the type doesn't carry NDP options.
+//
+//	RS  (133): 4 (header) + 4 (reserved) = 8
+//	RA  (134): 4 (header) + 12 (fields)  = 16
+//	NS  (135): 4 (header) + 4 (reserved) + 16 (target) = 24
+//	NA  (136): 4 (header) + 4 (flags)    + 16 (target) = 24
+//	Rdr (137): 4 (header) + 4 (reserved) + 16 (target) + 16 (dest) = 40
+func ndpOptionsOffset(icmpType byte) int {
+	switch icmpType {
+	case 133: // RS
+		return 8
+	case 134: // RA
+		return 16
+	case 135, 136: // NS, NA
+		return 24
+	case 137: // Redirect
+		return 40
+	default:
+		return -1
+	}
+}
+
+// parseLinkLayerAddr extracts a link-layer (MAC) address from NDP options.
+// buf is the full raw ICMPv6 message (type byte at buf[0]).
+// optionType: 1 = Source Link-Layer Address, 2 = Target Link-Layer Address.
+// Returns "" if the option is not found or the packet is malformed.
+func parseLinkLayerAddr(buf []byte, optionType byte) string {
+	if len(buf) < 1 {
+		return ""
+	}
+	offset := ndpOptionsOffset(buf[0])
+	if offset < 0 || len(buf) < offset {
+		return ""
+	}
+
+	// Walk the TLV option chain
+	for offset+2 <= len(buf) {
+		oType := buf[offset]
+		oLen := int(buf[offset+1]) * 8 // Length field is in 8-byte units
+
+		if oLen == 0 {
+			break // malformed option; avoid infinite loop
+		}
+		if offset+oLen > len(buf) {
+			break // truncated
+		}
+
+		if oType == optionType && oLen >= 8 {
+			// Bytes 2-7 of the option are the 6-byte Ethernet MAC address
+			mac := net.HardwareAddr(buf[offset+2 : offset+8])
+			return mac.String()
+		}
+
+		offset += oLen
+	}
+	return ""
 }
 
 // parseMLDGroups extracts multicast group addresses from a raw ICMPv6 packet.

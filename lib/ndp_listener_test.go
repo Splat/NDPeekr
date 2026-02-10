@@ -106,6 +106,180 @@ func TestIPFromAddr_Nil(t *testing.T) {
 	}
 }
 
+// --- Link-Layer Address (MAC) extraction tests ---
+
+// buildNS constructs a raw NS (type 135) packet with a Source Link-Layer Address option.
+// Layout: type(1) + code(1) + checksum(2) + reserved(4) + target(16) + option(8) = 32 bytes
+func buildNS(targetIP net.IP, srcMAC net.HardwareAddr) []byte {
+	buf := make([]byte, 32)
+	buf[0] = 135 // NS
+	copy(buf[8:24], targetIP.To16())
+	// Source Link-Layer Address option (type=1, len=1 → 8 bytes)
+	buf[24] = 1 // option type
+	buf[25] = 1 // length in 8-byte units
+	copy(buf[26:32], srcMAC)
+	return buf
+}
+
+// buildNA constructs a raw NA (type 136) packet with a Target Link-Layer Address option.
+func buildNA(targetIP net.IP, targetMAC net.HardwareAddr) []byte {
+	buf := make([]byte, 32)
+	buf[0] = 136 // NA
+	buf[4] = 0xe0 // R+S+O flags
+	copy(buf[8:24], targetIP.To16())
+	// Target Link-Layer Address option (type=2, len=1 → 8 bytes)
+	buf[24] = 2
+	buf[25] = 1
+	copy(buf[26:32], targetMAC)
+	return buf
+}
+
+// buildRS constructs a raw RS (type 133) packet with a Source Link-Layer Address option.
+// Layout: type(1) + code(1) + checksum(2) + reserved(4) + option(8) = 16 bytes
+func buildRS(srcMAC net.HardwareAddr) []byte {
+	buf := make([]byte, 16)
+	buf[0] = 133 // RS
+	buf[8] = 1   // option type (Source LLA)
+	buf[9] = 1   // length
+	copy(buf[10:16], srcMAC)
+	return buf
+}
+
+// buildRA constructs a raw RA (type 134) packet with a Source Link-Layer Address option.
+// Layout: type(1) + code(1) + checksum(2) + hop(1) + flags(1) + lifetime(2) +
+//
+//	reachable(4) + retrans(4) + option(8) = 24 bytes
+func buildRA(srcMAC net.HardwareAddr) []byte {
+	buf := make([]byte, 24)
+	buf[0] = 134 // RA
+	buf[4] = 64  // cur hop limit
+	// Source Link-Layer Address option starts at offset 16
+	buf[16] = 1
+	buf[17] = 1
+	copy(buf[18:24], srcMAC)
+	return buf
+}
+
+func TestParseLinkLayerAddr_NS(t *testing.T) {
+	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}
+	buf := buildNS(net.ParseIP("fe80::1"), mac)
+
+	got := parseLinkLayerAddr(buf, 1)
+	if got != "aa:bb:cc:dd:ee:01" {
+		t.Fatalf("parseLinkLayerAddr(NS, source) = %q, want %q", got, "aa:bb:cc:dd:ee:01")
+	}
+}
+
+func TestParseLinkLayerAddr_NA(t *testing.T) {
+	mac := net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}
+	buf := buildNA(net.ParseIP("fe80::2"), mac)
+
+	got := parseLinkLayerAddr(buf, 2)
+	if got != "00:11:22:33:44:55" {
+		t.Fatalf("parseLinkLayerAddr(NA, target) = %q, want %q", got, "00:11:22:33:44:55")
+	}
+}
+
+func TestParseLinkLayerAddr_RS(t *testing.T) {
+	mac := net.HardwareAddr{0xde, 0xad, 0xbe, 0xef, 0x00, 0x01}
+	buf := buildRS(mac)
+
+	got := parseLinkLayerAddr(buf, 1)
+	if got != "de:ad:be:ef:00:01" {
+		t.Fatalf("parseLinkLayerAddr(RS, source) = %q, want %q", got, "de:ad:be:ef:00:01")
+	}
+}
+
+func TestParseLinkLayerAddr_RA(t *testing.T) {
+	mac := net.HardwareAddr{0x02, 0x42, 0xac, 0x11, 0x00, 0x02}
+	buf := buildRA(mac)
+
+	got := parseLinkLayerAddr(buf, 1)
+	if got != "02:42:ac:11:00:02" {
+		t.Fatalf("parseLinkLayerAddr(RA, source) = %q, want %q", got, "02:42:ac:11:00:02")
+	}
+}
+
+func TestParseLinkLayerAddr_NoOption(t *testing.T) {
+	// NS with no options (DAD sends NS from :: without Source LLA)
+	buf := make([]byte, 24)
+	buf[0] = 135
+	copy(buf[8:24], net.ParseIP("fe80::1").To16())
+
+	got := parseLinkLayerAddr(buf, 1)
+	if got != "" {
+		t.Fatalf("parseLinkLayerAddr(NS without option) = %q, want empty", got)
+	}
+}
+
+func TestParseLinkLayerAddr_WrongOptionType(t *testing.T) {
+	// NA carries Target LLA (type 2), asking for Source (type 1) should find nothing
+	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+	buf := buildNA(net.ParseIP("fe80::1"), mac)
+
+	got := parseLinkLayerAddr(buf, 1) // asking for Source, but only Target present
+	if got != "" {
+		t.Fatalf("parseLinkLayerAddr(NA, wrong option type) = %q, want empty", got)
+	}
+}
+
+func TestParseLinkLayerAddr_TruncatedPacket(t *testing.T) {
+	got := parseLinkLayerAddr([]byte{135, 0, 0}, 1)
+	if got != "" {
+		t.Fatalf("parseLinkLayerAddr(truncated) = %q, want empty", got)
+	}
+}
+
+func TestParseLinkLayerAddr_NonNDPType(t *testing.T) {
+	buf := []byte{128, 0, 0, 0, 0, 0, 0, 0} // Echo Request
+	got := parseLinkLayerAddr(buf, 1)
+	if got != "" {
+		t.Fatalf("parseLinkLayerAddr(echo) = %q, want empty", got)
+	}
+}
+
+func TestParseLinkLayerAddr_MultipleOptions(t *testing.T) {
+	// NA with a prefix info option (type 3) followed by Target LLA (type 2)
+	buf := make([]byte, 24+8+8) // NS body + 8-byte dummy option + 8-byte LLA option
+	buf[0] = 136                // NA
+	buf[4] = 0xe0
+	copy(buf[8:24], net.ParseIP("fe80::1").To16())
+	// First option: type=3 (Prefix Info, normally 32 bytes, but we use 8 for simplicity)
+	buf[24] = 3
+	buf[25] = 1 // 8 bytes
+	// Second option: Target Link-Layer Address
+	buf[32] = 2
+	buf[33] = 1
+	mac := net.HardwareAddr{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	copy(buf[34:40], mac)
+
+	got := parseLinkLayerAddr(buf, 2)
+	if got != "11:22:33:44:55:66" {
+		t.Fatalf("parseLinkLayerAddr(multiple options) = %q, want %q", got, "11:22:33:44:55:66")
+	}
+}
+
+func TestNdpOptionsOffset(t *testing.T) {
+	cases := []struct {
+		icmpType byte
+		want     int
+	}{
+		{133, 8},   // RS
+		{134, 16},  // RA
+		{135, 24},  // NS
+		{136, 24},  // NA
+		{137, 40},  // Redirect
+		{128, -1},  // Echo Request (not NDP)
+		{131, -1},  // MLD (not NDP options)
+	}
+	for _, tc := range cases {
+		got := ndpOptionsOffset(tc.icmpType)
+		if got != tc.want {
+			t.Errorf("ndpOptionsOffset(%d) = %d, want %d", tc.icmpType, got, tc.want)
+		}
+	}
+}
+
 // buildMLDv1Report constructs a raw MLDv1 Report (type 131) packet.
 // Layout: type(1) + code(1) + checksum(2) + maxResponseDelay(2) + reserved(2) + multicastAddr(16) = 24 bytes
 func buildMLDv1Report(group net.IP) []byte {
