@@ -18,7 +18,7 @@ const (
 	showCursor     = "\033[?25h"   // Show cursor
 )
 
-const tableWidth = 120
+const tableWidth = 140
 
 // Message type short names for table columns
 var msgShortNames = map[string]string{
@@ -98,9 +98,9 @@ func RenderTable(w io.Writer, stats []PeerSummary, window time.Duration) {
 		return
 	}
 
-	// Table header: NDP columns | MLD columns | Total | Timestamps
-	fmt.Fprintf(w, "%-40s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s %5s  %-8s  %-8s\n",
-		"IPv6 Address",
+	// Table header: Address | MAC | NDP columns | MLD columns | Total | Timestamps
+	fmt.Fprintf(w, "%-40s %-17s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s %5s  %-8s  %-8s\n",
+		"IPv6 Address", "MAC",
 		"RS", "RA", "NS", "NA", "Rdr", "DAR", "DAC",
 		"MQ", "MR", "MD",
 		"Total", "First", "Last")
@@ -113,8 +113,14 @@ func RenderTable(w io.Writer, stats []PeerSummary, window time.Duration) {
 			counts[i] = peer.Counts[kind]
 		}
 
-		fmt.Fprintf(w, "%-40s %4d %4d %4d %4d %4d %4d %4d %4d %4d %4d %5d  %-8s  %-8s\n",
+		mac := peer.MAC
+		if mac == "" {
+			mac = "-"
+		}
+
+		fmt.Fprintf(w, "%-40s %-17s %4d %4d %4d %4d %4d %4d %4d %4d %4d %4d %5d  %-8s  %-8s\n",
 			truncate(peer.Address, 40),
+			mac,
 			counts[0], counts[1], counts[2], counts[3],
 			counts[4], counts[5], counts[6],
 			counts[7], counts[8], counts[9],
