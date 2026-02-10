@@ -17,8 +17,8 @@ NDPeeker was a quick illustration of what is possible. However, as enumerated in
 
 ## Proposed Features
 
-### 1. MAC Address Extraction from NDP
-
+### 1. MAC Address Extraction from NDP (IMPLEMENTED IN PR #11)
+```
 **Priority:** High
 **Complexity:** Low
 **Status:** Ready to implement
@@ -35,7 +35,7 @@ NDP Neighbor Solicitation and Neighbor Advertisement messages contain a Source/T
 - Direct IPv6-to-MAC correlation without additional protocols
 - Identify devices by hardware address across address changes
 - Detect MAC spoofing or address conflicts
-
+```
 ---
 
 ### 2. Router Tracking Table
@@ -427,6 +427,7 @@ So passively listening to MLD tells you not just that a host exists (which you a
 
 It also reveals devices that might be quiet on NDP but chatty on multicast such as IoT devices that primarily communicate via mDNS.
 ```
+---
 
 ## Implementation Priority
 
