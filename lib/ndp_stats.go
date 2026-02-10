@@ -22,6 +22,8 @@ type PeerStats struct {
 	// Groups tracks multicast group memberships from MLD reports.
 	// key: multicast group address, value: last report time.
 	Groups map[string]time.Time
+	// MAC is the link-layer address extracted from NDP options (if seen).
+	MAC string
 }
 
 // PeerSummary is a snapshot of peer stats for display
@@ -32,6 +34,7 @@ type PeerSummary struct {
 	Counts    map[string]int // message type -> count within window
 	Total     int
 	Groups    []string // multicast groups this peer has joined
+	MAC       string   // link-layer address (if observed)
 }
 
 // NewNDPStats creates a new NDPStats tracker with the given sliding window duration.
@@ -65,6 +68,15 @@ func (s *NDPStats) RecordMLDMembership(ip string, group string) {
 	peer.Groups[group] = now
 }
 
+// RecordMAC records the link-layer address observed for a peer.
+func (s *NDPStats) RecordMAC(ip string, mac string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	peer := s.getOrCreatePeer(ip, time.Now())
+	peer.MAC = mac
+}
+
 func (s *NDPStats) getOrCreatePeer(ip string, now time.Time) *PeerStats {
 	peer, ok := s.peers[ip]
 	if !ok {
@@ -94,6 +106,7 @@ func (s *NDPStats) GetStats() []PeerSummary {
 			FirstSeen: peer.FirstSeen,
 			LastSeen:  peer.LastSeen,
 			Counts:    make(map[string]int),
+			MAC:       peer.MAC,
 		}
 
 		for kind, timestamps := range peer.Messages {

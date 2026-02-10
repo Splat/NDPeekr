@@ -241,6 +241,49 @@ func TestPruneMLDMemberships(t *testing.T) {
 	}
 }
 
+func TestRecordMAC(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	stats.RecordMessage("fe80::1", "neighbor_solicitation")
+	stats.RecordMAC("fe80::1", "aa:bb:cc:dd:ee:01")
+
+	summaries := stats.GetStats()
+	if len(summaries) != 1 {
+		t.Fatalf("GetStats() returned %d peers, want 1", len(summaries))
+	}
+	if summaries[0].MAC != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("MAC = %q, want %q", summaries[0].MAC, "aa:bb:cc:dd:ee:01")
+	}
+}
+
+func TestRecordMAC_UpdatesOnNewMessage(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	stats.RecordMessage("fe80::1", "neighbor_solicitation")
+	stats.RecordMAC("fe80::1", "aa:bb:cc:dd:ee:01")
+	stats.RecordMAC("fe80::1", "aa:bb:cc:dd:ee:02")
+
+	summaries := stats.GetStats()
+	if summaries[0].MAC != "aa:bb:cc:dd:ee:02" {
+		t.Errorf("MAC = %q, want %q (should be updated)", summaries[0].MAC, "aa:bb:cc:dd:ee:02")
+	}
+}
+
+func TestRecordMAC_NoMessageYet(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	// RecordMAC on a peer that hasn't sent any messages yet
+	stats.RecordMAC("fe80::99", "11:22:33:44:55:66")
+
+	summaries := stats.GetStats()
+	if len(summaries) != 1 {
+		t.Fatalf("GetStats() returned %d peers, want 1", len(summaries))
+	}
+	if summaries[0].MAC != "11:22:33:44:55:66" {
+		t.Errorf("MAC = %q, want %q", summaries[0].MAC, "11:22:33:44:55:66")
+	}
+}
+
 func TestFirstSeenLastSeen(t *testing.T) {
 	stats := NewNDPStats(5 * time.Minute)
 
