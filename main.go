@@ -4,11 +4,12 @@ import (
 	"NDPeekr/lib"
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
@@ -22,20 +23,20 @@ func main() {
 	flag.Parse()
 
 	level := parseLogLevel(*logLevel)
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+
+	// Log to a file instead of stderr so output doesn't corrupt the TUI alt screen.
+	logFile, err := os.OpenFile("ndpeekr.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+
+	handler := slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: level})
 	logger := slog.New(handler).With("component", "ndpmon")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Graceful shutdown on SIGINT/SIGTERM.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		s := <-sigCh
-		logger.Info("signal received, shutting down", "signal", s.String())
-		cancel()
-	}()
 
 	// Create stats tracker
 	stats := lib.NewNDPStats(*window)
@@ -47,49 +48,31 @@ func main() {
 		Stats:      stats,
 	})
 
-	// Enter alternate screen buffer (like top/vim)
-	lib.EnterAltScreen(os.Stdout)
-	defer lib.ExitAltScreen(os.Stdout)
-
-	// Start display goroutine
-	displayDone := make(chan struct{})
+	// Start listener in background goroutine.
+	listenerErrCh := make(chan error, 1)
 	go func() {
-		defer close(displayDone)
-		ticker := time.NewTicker(*refresh)
-		defer ticker.Stop()
-
-		// Initial render
-		lib.RenderTable(os.Stdout, stats.GetStats(), *window)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				lib.RenderTable(os.Stdout, stats.GetStats(), *window)
-				// Periodically prune old data (every refresh)
-				stats.Prune()
-			}
-		}
+		listenerErrCh <- l.Run(ctx)
 	}()
 
 	logger.Info("starting NDP listener", "listen", *listenAddr, "iface", *ifaceName, "window", *window, "refresh", *refresh)
 
-	if err := l.Run(ctx); err != nil {
-		// Wait for display goroutine to finish
-		<-displayDone
+	// Create and run Bubble Tea program.
+	m := lib.NewModel(stats, *window, *refresh)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 
-		// If ctx canceled, treat as normal shutdown.
-		if ctx.Err() != nil {
-			return
-		}
-		lib.ExitAltScreen(os.Stdout) // Restore terminal before printing error
-		logger.Error("listener error", "err", err)
+	// Run blocks until the user quits (Ctrl+C or 'q').
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		cancel()
 		os.Exit(1)
 	}
 
-	// Wait for display goroutine to finish
-	<-displayDone
+	// TUI exited normally; shut down the listener.
+	cancel()
+	if err := <-listenerErrCh; err != nil && ctx.Err() == nil {
+		logger.Error("listener error", "err", err)
+		os.Exit(1)
+	}
 }
 
 func parseLogLevel(s string) slog.Level {

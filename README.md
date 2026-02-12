@@ -64,7 +64,7 @@ go test ./... -v
 NDPeekr requires root/sudo privileges to open raw ICMPv6 sockets.
 
 ### Using go run
-
+You will likely need to run `go run` with elevated privileges.
 ```bash
 # Basic usage with defaults (15m window, 2s refresh)
 sudo go run .

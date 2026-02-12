@@ -2,23 +2,29 @@ package lib
 
 import (
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/bubbles/table"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-// ANSI escape sequences for terminal control
+// Lipgloss styles
+var (
+	headerStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	activeTabStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6")).Underline(true)
+	inactiveTabStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	detailLabel      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
+	footerStyle      = lipgloss.NewStyle().Faint(true)
+)
+
+// Tab indices
 const (
-	enterAltScreen = "\033[?1049h" // Switch to alternate screen buffer
-	exitAltScreen  = "\033[?1049l" // Return to main screen buffer
-	cursorHome     = "\033[H"      // Move cursor to top-left
-	clearToEnd     = "\033[J"      // Clear from cursor to end of screen
-	hideCursor     = "\033[?25l"   // Hide cursor
-	showCursor     = "\033[?25h"   // Show cursor
+	tabPeers   = 0
+	tabRouters = 1
 )
-
-const tableWidth = 140
 
 // Message type short names for table columns
 var msgShortNames = map[string]string{
@@ -50,116 +56,431 @@ var msgColumnOrder = []string{
 
 // Well-known IPv6 multicast groups and what they indicate
 var knownMulticastGroups = map[string]string{
-	"ff02::1":     "All Nodes",
-	"ff02::2":     "All Routers",
-	"ff02::5":     "OSPFv3",
-	"ff02::6":     "OSPFv3 DR",
-	"ff02::9":     "RIPng",
-	"ff02::a":     "EIGRP",
-	"ff02::c":     "SSDP/UPnP",
-	"ff02::d":     "PIM",
-	"ff02::16":    "MLDv2",
-	"ff02::fb":    "mDNS",
-	"ff02::1:2":   "DHCPv6",
-	"ff02::1:3":   "LLMNR",
-	"ff05::1:3":   "DHCP Site",
-	"ff02::6a":    "VRRP",
-	"ff02::12":    "VRRP",
-	"ff02::102":   "HSRPv6",
-	"ff02::1:ff00:0/104": "Solicited-Node", // prefix, handled specially
+	"ff02::1":             "All Nodes",
+	"ff02::2":             "All Routers",
+	"ff02::5":             "OSPFv3",
+	"ff02::6":             "OSPFv3 DR",
+	"ff02::9":             "RIPng",
+	"ff02::a":             "EIGRP",
+	"ff02::c":             "SSDP/UPnP",
+	"ff02::d":             "PIM",
+	"ff02::16":            "MLDv2",
+	"ff02::fb":            "mDNS",
+	"ff02::1:2":           "DHCPv6",
+	"ff02::1:3":           "LLMNR",
+	"ff05::1:3":           "DHCP Site",
+	"ff02::6a":            "VRRP",
+	"ff02::12":            "VRRP",
+	"ff02::102":           "HSRPv6",
+	"ff02::1:ff00:0/104":  "Solicited-Node", // prefix, handled specially
 }
 
-// EnterAltScreen switches to the alternate screen buffer (like top/vim).
-// Call ExitAltScreen when done to restore the original terminal.
-func EnterAltScreen(w io.Writer) {
-	fmt.Fprint(w, enterAltScreen, hideCursor)
+// tickMsg drives periodic data refresh
+type tickMsg time.Time
+
+func tickCmd(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
-// ExitAltScreen returns to the main screen buffer and restores cursor.
-func ExitAltScreen(w io.Writer) {
-	fmt.Fprint(w, showCursor, exitAltScreen)
+// Model is the Bubble Tea model for the NDPeekr TUI.
+type Model struct {
+	stats   *NDPStats
+	window  time.Duration
+	refresh time.Duration
+
+	// View state
+	activeTab  int    // tabPeers or tabRouters
+	activeView string // "table" or "detail"
+
+	// Tables
+	peerTable   table.Model
+	routerTable table.Model
+
+	// Detail view
+	selectedPeer *PeerSummary
+
+	// Data snapshots
+	peers []PeerSummary
+
+	quitting bool
 }
 
-// RenderTable renders the stats table to the given writer.
-// It moves the cursor home and redraws in place.
-func RenderTable(w io.Writer, stats []PeerSummary, window time.Duration) {
-	// Move cursor to top-left, then draw content
-	fmt.Fprint(w, cursorHome)
-
-	// Header
-	fmt.Fprintf(w, "NDP/MLD Statistics (window: %s, updated: %s)\n",
-		formatDuration(window),
-		time.Now().Format("15:04:05"))
-	fmt.Fprintln(w, strings.Repeat("─", tableWidth))
-
-	if len(stats) == 0 {
-		fmt.Fprintln(w, "No NDP/MLD traffic observed yet...")
-		fmt.Fprint(w, clearToEnd)
-		return
+// NewModel creates a new Bubble Tea model for the NDPeekr TUI.
+func NewModel(stats *NDPStats, window, refresh time.Duration) Model {
+	m := Model{
+		stats:      stats,
+		window:     window,
+		refresh:    refresh,
+		activeTab:  tabPeers,
+		activeView: "table",
 	}
 
-	// Table header: Address | MAC | NDP columns | MLD columns | Total | Timestamps
-	fmt.Fprintf(w, "%-40s %-17s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s %5s  %-8s  %-8s\n",
-		"IPv6 Address", "MAC",
-		"RS", "RA", "NS", "NA", "Rdr", "DAR", "DAC",
-		"MQ", "MR", "MD",
-		"Total", "First", "Last")
-	fmt.Fprintln(w, strings.Repeat("─", tableWidth))
+	m.peerTable = newPeerTable()
+	m.routerTable = newRouterTable()
+	m.routerTable.Blur()
 
-	// Table rows
-	for _, peer := range stats {
-		counts := make([]int, len(msgColumnOrder))
-		for i, kind := range msgColumnOrder {
-			counts[i] = peer.Counts[kind]
+	// Load initial data
+	m.peers = stats.GetStats()
+	m.peerTable.SetRows(peerRows(m.peers))
+
+	return m
+}
+
+// Init starts the tick cycle.
+func (m Model) Init() tea.Cmd {
+	return tickCmd(m.refresh)
+}
+
+// Update handles messages.
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// Reserve lines for header, tab bar, footer, and summary text.
+		tableHeight := msg.Height - 10
+		if tableHeight < 3 {
+			tableHeight = 3
+		}
+		m.peerTable.SetHeight(tableHeight)
+		m.routerTable.SetHeight(tableHeight)
+		return m, nil
+
+	case tickMsg:
+		m.peers = m.stats.GetStats()
+		m.stats.Prune()
+		m.peerTable.SetRows(peerRows(m.peers))
+		return m, tickCmd(m.refresh)
+
+	case tea.KeyMsg:
+		return m.handleKey(msg)
+	}
+
+	return m, nil
+}
+
+func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Quit from anywhere
+	if key == "ctrl+c" {
+		m.quitting = true
+		return m, tea.Quit
+	}
+
+	// Detail view: only Esc and q are handled
+	if m.activeView == "detail" {
+		switch key {
+		case "esc":
+			m.activeView = "table"
+		case "q":
+			m.quitting = true
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	// Table view key handling
+	switch key {
+	case "q":
+		m.quitting = true
+		return m, tea.Quit
+
+	case "tab":
+		m.switchTab((m.activeTab + 1) % 2)
+
+	case "shift+tab":
+		m.switchTab((m.activeTab + 1) % 2)
+
+	case "enter":
+		if m.activeTab == tabPeers {
+			row := m.peerTable.SelectedRow()
+			if row != nil {
+				addr := row[0]
+				for i := range m.peers {
+					if m.peers[i].Address == addr {
+						m.selectedPeer = &m.peers[i]
+						m.activeView = "detail"
+						break
+					}
+				}
+			}
+		}
+		return m, nil
+
+	default:
+		// Delegate navigation keys to the active table
+		var cmd tea.Cmd
+		if m.activeTab == tabPeers {
+			m.peerTable, cmd = m.peerTable.Update(msg)
+		} else {
+			m.routerTable, cmd = m.routerTable.Update(msg)
+		}
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+func (m *Model) switchTab(tab int) {
+	m.activeTab = tab
+	if tab == tabPeers {
+		m.peerTable.Focus()
+		m.routerTable.Blur()
+	} else {
+		m.peerTable.Blur()
+		m.routerTable.Focus()
+	}
+}
+
+// View renders the TUI.
+func (m Model) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	var b strings.Builder
+
+	// Header
+	b.WriteString(headerStyle.Render(fmt.Sprintf(
+		"NDP/MLD Statistics (window: %s, updated: %s)",
+		formatDuration(m.window),
+		time.Now().Format("15:04:05"),
+	)))
+	b.WriteString("\n\n")
+
+	// Tab bar
+	b.WriteString(m.renderTabBar())
+	b.WriteString("\n\n")
+
+	if m.activeView == "detail" {
+		b.WriteString(m.renderDetail())
+	} else {
+		b.WriteString(m.renderTableView())
+	}
+
+	// Footer
+	b.WriteString("\n")
+	if m.activeView == "detail" {
+		b.WriteString(footerStyle.Render("Esc: back  q: quit"))
+	} else {
+		b.WriteString(footerStyle.Render("↑/↓: navigate  Enter: details  Tab: switch view  q: quit"))
+	}
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+func (m Model) renderTabBar() string {
+	tabs := []string{"Peers", "Routers"}
+	var parts []string
+	for i, name := range tabs {
+		if i == m.activeTab {
+			parts = append(parts, activeTabStyle.Render("[ "+name+" ]"))
+		} else {
+			parts = append(parts, inactiveTabStyle.Render("  "+name+"  "))
+		}
+	}
+	return strings.Join(parts, "  ")
+}
+
+func (m Model) renderTableView() string {
+	var b strings.Builder
+
+	if m.activeTab == tabPeers {
+		if len(m.peers) == 0 {
+			b.WriteString("No NDP/MLD traffic observed yet...\n")
+			return b.String()
 		}
 
-		mac := peer.MAC
+		b.WriteString(m.peerTable.View())
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("Total peers: %d\n", len(m.peers)))
+
+		// Multicast group summary
+		groupMembers := aggregateMulticastGroups(m.peers)
+		if len(groupMembers) > 0 {
+			b.WriteString("\n")
+			b.WriteString(headerStyle.Render("Multicast Groups:"))
+			b.WriteString("\n")
+			for _, gm := range groupMembers {
+				label := multicastLabel(gm.Group)
+				noun := "hosts"
+				if gm.Members == 1 {
+					noun = "host"
+				}
+				b.WriteString(fmt.Sprintf("  %-40s %-16s %d %s\n",
+					truncate(gm.Group, 40), label, gm.Members, noun))
+			}
+		}
+	} else {
+		b.WriteString(m.routerTable.View())
+		b.WriteString("\n\n")
+		b.WriteString("Router tracking coming soon...\n")
+	}
+
+	return b.String()
+}
+
+func (m Model) renderDetail() string {
+	if m.selectedPeer == nil {
+		return "No peer selected.\n"
+	}
+	p := m.selectedPeer
+
+	var b strings.Builder
+
+	b.WriteString(headerStyle.Render("Peer Detail: "+p.Address))
+	b.WriteString("\n\n")
+
+	// Identity
+	mac := p.MAC
+	if mac == "" {
+		mac = "-"
+	}
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("MAC:"), mac))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("First Seen:"), formatTimestamp(p.FirstSeen)))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Last Seen:"), formatTimestamp(p.LastSeen)))
+
+	// Message counts
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("  %s\n", detailLabel.Render("Message Counts:")))
+	// NDP row
+	b.WriteString("    ")
+	for _, kind := range msgColumnOrder[:7] {
+		name := msgShortNames[kind]
+		count := p.Counts[kind]
+		b.WriteString(fmt.Sprintf("%-5s %4d    ", name, count))
+	}
+	b.WriteString("\n")
+	// MLD row
+	b.WriteString("    ")
+	for _, kind := range msgColumnOrder[7:] {
+		name := msgShortNames[kind]
+		count := p.Counts[kind]
+		b.WriteString(fmt.Sprintf("%-5s %4d    ", name, count))
+	}
+	b.WriteString("\n")
+
+	b.WriteString(fmt.Sprintf("\n  %s  %d\n", detailLabel.Render("Total:"), p.Total))
+
+	// Multicast groups
+	if len(p.Groups) > 0 {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("  %s\n", detailLabel.Render("Multicast Groups:")))
+		for _, group := range p.Groups {
+			label := multicastLabel(group)
+			if label != "" {
+				b.WriteString(fmt.Sprintf("    %-40s %s\n", group, label))
+			} else {
+				b.WriteString(fmt.Sprintf("    %s\n", group))
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// --- Table constructors ---
+
+func newPeerTable() table.Model {
+	columns := []table.Column{
+		{Title: "IPv6 Address", Width: 40},
+		{Title: "MAC", Width: 17},
+		{Title: "RS", Width: 4},
+		{Title: "RA", Width: 4},
+		{Title: "NS", Width: 4},
+		{Title: "NA", Width: 4},
+		{Title: "Rdr", Width: 4},
+		{Title: "DAR", Width: 4},
+		{Title: "DAC", Width: 4},
+		{Title: "MQ", Width: 4},
+		{Title: "MR", Width: 4},
+		{Title: "MD", Width: 4},
+		{Title: "Total", Width: 5},
+		{Title: "First", Width: 8},
+		{Title: "Last", Width: 8},
+	}
+
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(true)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithFocused(true),
+		table.WithHeight(20),
+		table.WithStyles(s),
+	)
+
+	return t
+}
+
+func newRouterTable() table.Model {
+	columns := []table.Column{
+		{Title: "Router Address", Width: 40},
+		{Title: "MAC", Width: 17},
+		{Title: "Lifetime", Width: 8},
+		{Title: "M", Width: 3},
+		{Title: "O", Width: 3},
+		{Title: "Prefixes", Width: 30},
+		{Title: "Last Seen", Width: 10},
+	}
+
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(true)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithFocused(false),
+		table.WithHeight(20),
+		table.WithStyles(s),
+	)
+
+	return t
+}
+
+// peerRows converts PeerSummary data into table rows.
+func peerRows(peers []PeerSummary) []table.Row {
+	rows := make([]table.Row, 0, len(peers))
+	for _, p := range peers {
+		mac := p.MAC
 		if mac == "" {
 			mac = "-"
 		}
-
-		fmt.Fprintf(w, "%-40s %-17s %4d %4d %4d %4d %4d %4d %4d %4d %4d %4d %5d  %-8s  %-8s\n",
-			truncate(peer.Address, 40),
+		row := table.Row{
+			p.Address,
 			mac,
-			counts[0], counts[1], counts[2], counts[3],
-			counts[4], counts[5], counts[6],
-			counts[7], counts[8], counts[9],
-			peer.Total,
-			formatTimestamp(peer.FirstSeen),
-			formatTimestamp(peer.LastSeen),
-		)
-	}
-
-	fmt.Fprintln(w, strings.Repeat("─", tableWidth))
-	fmt.Fprintf(w, "Total peers: %d\n", len(stats))
-
-	// Multicast group summary
-	groupMembers := aggregateMulticastGroups(stats)
-	if len(groupMembers) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Multicast Groups:")
-		for _, gm := range groupMembers {
-			label := multicastLabel(gm.Group)
-			noun := "hosts"
-			if gm.Members == 1 {
-				noun = "host"
-			}
-			if label != "" {
-				fmt.Fprintf(w, "  %-40s %-16s %d %s\n",
-					truncate(gm.Group, 40), label, gm.Members, noun)
-			} else {
-				fmt.Fprintf(w, "  %-40s %-16s %d %s\n",
-					truncate(gm.Group, 40), "", gm.Members, noun)
-			}
 		}
+		for _, kind := range msgColumnOrder {
+			row = append(row, fmt.Sprintf("%d", p.Counts[kind]))
+		}
+		row = append(row,
+			fmt.Sprintf("%d", p.Total),
+			formatTimestamp(p.FirstSeen),
+			formatTimestamp(p.LastSeen),
+		)
+		rows = append(rows, row)
 	}
-
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Press Ctrl+C to exit")
-
-	// Clear any leftover content from previous renders (e.g., if peer count decreased)
-	fmt.Fprint(w, clearToEnd)
+	return rows
 }
+
+// --- Helper functions (unchanged) ---
 
 type multicastGroupEntry struct {
 	Group   string
