@@ -338,7 +338,17 @@ func (m Model) renderDetail() string {
 	if mac == "" {
 		mac = "-"
 	}
+	hl := "-"
+	if p.HopLimit != 0 {
+		hl = fmt.Sprintf("%d", p.HopLimit)
+	}
+	iface := p.Interface
+	if iface == "" {
+		iface = "-"
+	}
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("MAC:"), mac))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Hop Limit:"), hl))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Interface:"), iface))
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("First Seen:"), formatTimestamp(p.FirstSeen)))
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Last Seen:"), formatTimestamp(p.LastSeen)))
 
@@ -387,6 +397,8 @@ func newPeerTable() table.Model {
 	columns := []table.Column{
 		{Title: "IPv6 Address", Width: 40},
 		{Title: "MAC", Width: 17},
+		{Title: "HL", Width: 3},
+		{Title: "Iface", Width: 10},
 		{Title: "RS", Width: 4},
 		{Title: "RA", Width: 4},
 		{Title: "NS", Width: 4},
@@ -463,9 +475,19 @@ func peerRows(peers []PeerSummary) []table.Row {
 		if mac == "" {
 			mac = "-"
 		}
+		hl := "-"
+		if p.HopLimit != 0 {
+			hl = fmt.Sprintf("%d", p.HopLimit)
+		}
+		iface := p.Interface
+		if iface == "" {
+			iface = "-"
+		}
 		row := table.Row{
 			p.Address,
 			mac,
+			hl,
+			iface,
 		}
 		for _, kind := range msgColumnOrder {
 			row = append(row, fmt.Sprintf("%d", p.Counts[kind]))

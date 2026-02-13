@@ -149,6 +149,16 @@ func (l *NDPListener) Run(ctx context.Context) error {
 		// Record to stats if configured, otherwise log
 		if l.cfg.Stats != nil {
 			l.cfg.Stats.RecordMessage(srcIP, ndpKind)
+			if cm != nil {
+				if cm.HopLimit != 0 {
+					l.cfg.Stats.RecordHopLimit(srcIP, cm.HopLimit)
+				}
+				if cm.IfIndex != 0 {
+					if ifi, e := net.InterfaceByIndex(cm.IfIndex); e == nil {
+						l.cfg.Stats.RecordInterface(srcIP, ifi.Name)
+					}
+				}
+			}
 
 			// Extract link-layer (MAC) address from NDP options
 			var mac string

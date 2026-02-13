@@ -24,6 +24,10 @@ type PeerStats struct {
 	Groups map[string]time.Time
 	// MAC is the link-layer address extracted from NDP options (if seen).
 	MAC string
+	// HopLimit is the most recently observed IPv6 hop limit for this peer.
+	HopLimit int
+	// Interface is the most recently observed network interface name for this peer.
+	Interface string
 }
 
 // PeerSummary is a snapshot of peer stats for display
@@ -35,6 +39,8 @@ type PeerSummary struct {
 	Total     int
 	Groups    []string // multicast groups this peer has joined
 	MAC       string   // link-layer address (if observed)
+	HopLimit  int      // most recent IPv6 hop limit
+	Interface string   // most recent network interface name
 }
 
 // NewNDPStats creates a new NDPStats tracker with the given sliding window duration.
@@ -77,6 +83,24 @@ func (s *NDPStats) RecordMAC(ip string, mac string) {
 	peer.MAC = mac
 }
 
+// RecordHopLimit records the IPv6 hop limit observed for a peer.
+func (s *NDPStats) RecordHopLimit(ip string, hopLimit int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	peer := s.getOrCreatePeer(ip, time.Now())
+	peer.HopLimit = hopLimit
+}
+
+// RecordInterface records the network interface name observed for a peer.
+func (s *NDPStats) RecordInterface(ip string, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	peer := s.getOrCreatePeer(ip, time.Now())
+	peer.Interface = name
+}
+
 func (s *NDPStats) getOrCreatePeer(ip string, now time.Time) *PeerStats {
 	peer, ok := s.peers[ip]
 	if !ok {
@@ -107,6 +131,8 @@ func (s *NDPStats) GetStats() []PeerSummary {
 			LastSeen:  peer.LastSeen,
 			Counts:    make(map[string]int),
 			MAC:       peer.MAC,
+			HopLimit:  peer.HopLimit,
+			Interface: peer.Interface,
 		}
 
 		for kind, timestamps := range peer.Messages {
