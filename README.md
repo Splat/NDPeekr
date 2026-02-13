@@ -123,12 +123,12 @@ Total peers: 3
 
 ## Message Types
 
-| Abbreviation | Full Name | Description |
-|--------------|-----------|-------------|
-| RS | Router Solicitation | Host requesting router information |
-| RA | Router Advertisement | Router announcing its presence and network config |
-| NS | Neighbor Solicitation | Address resolution (like ARP for IPv6) |
-| NA | Neighbor Advertisement | Response to NS with link-layer address |
-| Redir | Redirect | Router informing host of better first-hop |
-| DAR | Duplicate Address Request | DAD probe (RFC 6775) |
-| DAC | Duplicate Address Confirmation | DAD response (RFC 6775) |
+| Abbreviation | Full Name                      | Description                                       |
+|--------------|--------------------------------|---------------------------------------------------|
+| RS           | Router Solicitation            | Host requesting router information                |
+| RA           | Router Advertisement           | Router announcing its presence and network config |
+| NS           | Neighbor Solicitation          | Address resolution (like ARP for IPv6)            |
+| NA           | Neighbor Advertisement         | Response to NS with link-layer address            |
+| Redir        | Redirect                       | Router informing host of better first-hop         |
+| DAR          | Duplicate Address Request      | DAD probe (RFC 6775)                              |
+| DAC          | Duplicate Address Confirmation | DAD response (RFC 6775)                           |
