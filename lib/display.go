@@ -56,23 +56,23 @@ var msgColumnOrder = []string{
 
 // Well-known IPv6 multicast groups and what they indicate
 var knownMulticastGroups = map[string]string{
-	"ff02::1":             "All Nodes",
-	"ff02::2":             "All Routers",
-	"ff02::5":             "OSPFv3",
-	"ff02::6":             "OSPFv3 DR",
-	"ff02::9":             "RIPng",
-	"ff02::a":             "EIGRP",
-	"ff02::c":             "SSDP/UPnP",
-	"ff02::d":             "PIM",
-	"ff02::16":            "MLDv2",
-	"ff02::fb":            "mDNS",
-	"ff02::1:2":           "DHCPv6",
-	"ff02::1:3":           "LLMNR",
-	"ff05::1:3":           "DHCP Site",
-	"ff02::6a":            "VRRP",
-	"ff02::12":            "VRRP",
-	"ff02::102":           "HSRPv6",
-	"ff02::1:ff00:0/104":  "Solicited-Node", // prefix, handled specially
+	"ff02::1":            "All Nodes",
+	"ff02::2":            "All Routers",
+	"ff02::5":            "OSPFv3",
+	"ff02::6":            "OSPFv3 DR",
+	"ff02::9":            "RIPng",
+	"ff02::a":            "EIGRP",
+	"ff02::c":            "SSDP/UPnP",
+	"ff02::d":            "PIM",
+	"ff02::16":           "MLDv2",
+	"ff02::fb":           "mDNS",
+	"ff02::1:2":          "DHCPv6",
+	"ff02::1:3":          "LLMNR",
+	"ff05::1:3":          "DHCP Site",
+	"ff02::6a":           "VRRP",
+	"ff02::12":           "VRRP",
+	"ff02::102":          "HSRPv6",
+	"ff02::1:ff00:0/104": "Solicited-Node", // prefix, handled specially
 }
 
 // tickMsg drives periodic data refresh
@@ -272,7 +272,7 @@ func (m Model) View() string {
 }
 
 func (m Model) renderTabBar() string {
-	tabs := []string{"Peers", "Routers"}
+	tabs := []string{"NDP/MLD Peers", "Routers"}
 	var parts []string
 	for i, name := range tabs {
 		if i == m.activeTab {
@@ -330,7 +330,7 @@ func (m Model) renderDetail() string {
 
 	var b strings.Builder
 
-	b.WriteString(headerStyle.Render("Peer Detail: "+p.Address))
+	b.WriteString(headerStyle.Render("Peer Detail: " + p.Address))
 	b.WriteString("\n\n")
 
 	// Identity
