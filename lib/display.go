@@ -99,10 +99,12 @@ type Model struct {
 	routerTable table.Model
 
 	// Detail view
-	selectedPeer *PeerSummary
+	selectedPeer   *PeerSummary
+	selectedRouter *RouterInfo
 
 	// Data snapshots
-	peers []PeerSummary
+	peers   []PeerSummary
+	routers []RouterInfo
 
 	quitting bool
 }
@@ -124,6 +126,8 @@ func NewModel(stats *NDPStats, window, refresh time.Duration) Model {
 	// Load initial data
 	m.peers = stats.GetStats()
 	m.peerTable.SetRows(peerRows(m.peers))
+	m.routers = stats.GetRouters()
+	m.routerTable.SetRows(routerRows(m.routers))
 
 	return m
 }
@@ -150,6 +154,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.peers = m.stats.GetStats()
 		m.stats.Prune()
 		m.peerTable.SetRows(peerRows(m.peers))
+		m.routers = m.stats.GetRouters()
+		m.routerTable.SetRows(routerRows(m.routers))
 		return m, tickCmd(m.refresh)
 
 	case tea.KeyMsg:
@@ -205,6 +211,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+		} else if m.activeTab == tabRouters {
+			row := m.routerTable.SelectedRow()
+			if row != nil {
+				addr := row[0]
+				for i := range m.routers {
+					if m.routers[i].Address == addr {
+						m.selectedRouter = &m.routers[i]
+						m.activeView = "detail"
+						break
+					}
+				}
+			}
 		}
 		return m, nil
 
@@ -254,7 +272,11 @@ func (m Model) View() string {
 	b.WriteString("\n\n")
 
 	if m.activeView == "detail" {
-		b.WriteString(m.renderDetail())
+		if m.activeTab == tabRouters && m.selectedRouter != nil {
+			b.WriteString(m.renderRouterDetail())
+		} else {
+			b.WriteString(m.renderDetail())
+		}
 	} else {
 		b.WriteString(m.renderTableView())
 	}
@@ -314,9 +336,13 @@ func (m Model) renderTableView() string {
 			}
 		}
 	} else {
-		b.WriteString(m.routerTable.View())
-		b.WriteString("\n\n")
-		b.WriteString("Router tracking coming soon...\n")
+		if len(m.routers) == 0 {
+			b.WriteString("No routers observed yet...\n")
+		} else {
+			b.WriteString(m.routerTable.View())
+			b.WriteString("\n\n")
+			b.WriteString(fmt.Sprintf("Total routers: %d\n", len(m.routers)))
+		}
 	}
 
 	return b.String()
@@ -439,11 +465,15 @@ func newRouterTable() table.Model {
 	columns := []table.Column{
 		{Title: "Router Address", Width: 40},
 		{Title: "MAC", Width: 17},
-		{Title: "Lifetime", Width: 8},
-		{Title: "M", Width: 3},
-		{Title: "O", Width: 3},
-		{Title: "Prefixes", Width: 30},
-		{Title: "Last Seen", Width: 10},
+		{Title: "Life", Width: 6},
+		{Title: "Hop", Width: 3},
+		{Title: "M", Width: 1},
+		{Title: "O", Width: 1},
+		{Title: "Pfx", Width: 3},
+		{Title: "MTU", Width: 5},
+		{Title: "DNS", Width: 3},
+		{Title: "Iface", Width: 10},
+		{Title: "Last Seen", Width: 8},
 	}
 
 	s := table.DefaultStyles()
@@ -500,6 +530,157 @@ func peerRows(peers []PeerSummary) []table.Row {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// routerRows converts RouterInfo data into table rows.
+func routerRows(routers []RouterInfo) []table.Row {
+	rows := make([]table.Row, 0, len(routers))
+	for _, r := range routers {
+		mac := r.MAC
+		if mac == "" {
+			mac = "-"
+		}
+		hop := "-"
+		if r.HopLimit != 0 {
+			hop = fmt.Sprintf("%d", r.HopLimit)
+		}
+		m := "N"
+		if r.Managed {
+			m = "Y"
+		}
+		o := "N"
+		if r.Other {
+			o = "Y"
+		}
+		mtu := "-"
+		if r.MTU != 0 {
+			mtu = fmt.Sprintf("%d", r.MTU)
+		}
+		iface := r.Interface
+		if iface == "" {
+			iface = "-"
+		}
+		rows = append(rows, table.Row{
+			r.Address,
+			mac,
+			formatDuration(r.Lifetime),
+			hop,
+			m,
+			o,
+			fmt.Sprintf("%d", len(r.Prefixes)),
+			mtu,
+			fmt.Sprintf("%d", len(r.RDNSS)),
+			iface,
+			formatTimestamp(r.LastSeen),
+		})
+	}
+	return rows
+}
+
+func (m Model) renderRouterDetail() string {
+	r := m.selectedRouter
+	if r == nil {
+		return "No router selected.\n"
+	}
+
+	var b strings.Builder
+
+	b.WriteString(headerStyle.Render("Router Detail: " + r.Address))
+	b.WriteString("\n\n")
+
+	// Identity
+	mac := r.MAC
+	if mac == "" {
+		mac = "-"
+	}
+	hop := "-"
+	if r.HopLimit != 0 {
+		hop = fmt.Sprintf("%d", r.HopLimit)
+	}
+	iface := r.Interface
+	if iface == "" {
+		iface = "-"
+	}
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("MAC:"), mac))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Interface:"), iface))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Hop Limit:"), hop))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("First Seen:"), formatTimestamp(r.FirstSeen)))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Last Seen:"), formatTimestamp(r.LastSeen)))
+
+	// Flags and Lifetime
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("  %s\n", detailLabel.Render("Router Advertisement:")))
+	b.WriteString(fmt.Sprintf("    Lifetime:      %s\n", formatDuration(r.Lifetime)))
+	managed := "No"
+	if r.Managed {
+		managed = "Yes  (use DHCPv6 for addresses)"
+	}
+	other := "No"
+	if r.Other {
+		other = "Yes  (use DHCPv6 for other config)"
+	}
+	b.WriteString(fmt.Sprintf("    Managed (M):   %s\n", managed))
+	b.WriteString(fmt.Sprintf("    Other (O):     %s\n", other))
+	if r.MTU != 0 {
+		b.WriteString(fmt.Sprintf("    MTU:           %d\n", r.MTU))
+	}
+
+	// Prefixes
+	if len(r.Prefixes) > 0 {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("  %s\n", detailLabel.Render("Prefixes:")))
+		b.WriteString(fmt.Sprintf("    %-40s  %-8s  %-8s  %s  %s\n",
+			"Prefix", "Valid", "Pref", "L", "A"))
+		for _, p := range r.Prefixes {
+			onLink := "N"
+			if p.OnLink {
+				onLink = "Y"
+			}
+			auto := "N"
+			if p.Autonomous {
+				auto = "Y"
+			}
+			b.WriteString(fmt.Sprintf("    %-40s  %-8s  %-8s  %s  %s\n",
+				p.Prefix,
+				formatDuration(p.ValidLifetime),
+				formatDuration(p.PreferredLife),
+				onLink,
+				auto,
+			))
+		}
+	}
+
+	// DNS Servers
+	if len(r.RDNSS) > 0 {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("  %s\n", detailLabel.Render("DNS Servers (RDNSS):")))
+		for _, dns := range r.RDNSS {
+			b.WriteString(fmt.Sprintf("    %s\n", dns))
+		}
+	}
+
+	// Routes
+	if len(r.Routes) > 0 {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("  %s\n", detailLabel.Render("Routes:")))
+		b.WriteString(fmt.Sprintf("    %-40s  %-8s  %s\n", "Prefix", "Lifetime", "Pref"))
+		for _, rt := range r.Routes {
+			pref := "med"
+			switch rt.Preference {
+			case 1:
+				pref = "high"
+			case 3:
+				pref = "low"
+			}
+			b.WriteString(fmt.Sprintf("    %-40s  %-8s  %s\n",
+				rt.Prefix,
+				formatDuration(rt.Lifetime),
+				pref,
+			))
+		}
+	}
+
+	return b.String()
 }
 
 // --- Helper functions (unchanged) ---
