@@ -172,6 +172,23 @@ func (l *NDPListener) Run(ctx context.Context) error {
 				l.cfg.Stats.RecordMAC(srcIP, mac)
 			}
 
+			// Parse Router Advertisement details
+			if ndpKind == "router_advertisement" {
+				ifName := ""
+				if cm != nil && cm.IfIndex != 0 {
+					if ifi, e := net.InterfaceByIndex(cm.IfIndex); e == nil {
+						ifName = ifi.Name
+					}
+				}
+				hopLim := 0
+				if cm != nil {
+					hopLim = cm.HopLimit
+				}
+				if ri := parseRA(buf[:n], srcIP, mac, hopLim, ifName); ri != nil {
+					l.cfg.Stats.RecordRouter(*ri)
+				}
+			}
+
 			// Extract multicast group addresses from MLD reports/done
 			if ndpKind == "mld_report" || ndpKind == "mld_done" {
 				for _, group := range parseMLDGroups(buf[:n]) {
@@ -356,6 +373,143 @@ func parseMLDv1Groups(buf []byte) []string {
 //	Bytes 4-19: Multicast Address (16 bytes)
 //	Bytes 20+: Source Addresses (16 bytes each)
 //	Then:      Auxiliary Data (AuxDataLen * 4 bytes)
+// parseRA extracts Router Advertisement fields and options from a raw ICMPv6 packet.
+// buf must be the full ICMPv6 message. Returns nil if the packet is too short.
+//
+// RA header layout (after 4-byte ICMPv6 header):
+//
+//	Byte 4:   Cur Hop Limit
+//	Byte 5:   Flags — bit 7 = M (managed), bit 6 = O (other config)
+//	Bytes 6-7: Router Lifetime (seconds, big-endian)
+//
+// RA options start at byte 16 (TLV chain).
+func parseRA(buf []byte, srcIP, mac string, hopLimit int, ifName string) *RouterInfo {
+	// Minimum RA: 4 (ICMPv6 header) + 12 (RA fields) = 16 bytes
+	if len(buf) < 16 {
+		return nil
+	}
+
+	ri := &RouterInfo{
+		Address:   srcIP,
+		MAC:       mac,
+		Interface: ifName,
+		LastSeen:  time.Now(),
+	}
+
+	// RA header fields
+	ri.HopLimit = int(buf[4])
+	ri.Managed = buf[5]&0x80 != 0
+	ri.Other = buf[5]&0x40 != 0
+	ri.Lifetime = time.Duration(binary.BigEndian.Uint16(buf[6:8])) * time.Second
+
+	// If the IPv6 hop limit from the control message is available and the RA
+	// cur-hop-limit field is zero, use the control message value.
+	if ri.HopLimit == 0 && hopLimit != 0 {
+		ri.HopLimit = hopLimit
+	}
+
+	// Walk RA options (TLV chain starting at byte 16)
+	offset := 16
+	for offset+2 <= len(buf) {
+		oType := buf[offset]
+		oLen := int(buf[offset+1]) * 8 // length in 8-byte units
+		if oLen == 0 {
+			break
+		}
+		if offset+oLen > len(buf) {
+			break
+		}
+
+		switch oType {
+		case 3: // Prefix Information (32 bytes)
+			if oLen >= 32 {
+				parseRAPrefixInfo(buf[offset:offset+oLen], ri)
+			}
+		case 5: // MTU
+			if oLen >= 8 {
+				ri.MTU = binary.BigEndian.Uint32(buf[offset+4 : offset+8])
+			}
+		case 24: // Route Information (RFC 4191)
+			if oLen >= 8 {
+				parseRARouteInfo(buf[offset:offset+oLen], oLen, ri)
+			}
+		case 25: // RDNSS (RFC 6106)
+			if oLen >= 24 {
+				parseRARDNSS(buf[offset:offset+oLen], oLen, ri)
+			}
+		}
+
+		offset += oLen
+	}
+
+	return ri
+}
+
+// parseRAPrefixInfo parses an RA Prefix Information option (type 3, 32 bytes).
+//
+//	Byte 2:     Prefix Length
+//	Byte 3:     Flags — bit 7 = L (on-link), bit 6 = A (autonomous/SLAAC)
+//	Bytes 4-7:  Valid Lifetime (seconds)
+//	Bytes 8-11: Preferred Lifetime (seconds)
+//	Bytes 16-31: Prefix (16 bytes)
+func parseRAPrefixInfo(opt []byte, ri *RouterInfo) {
+	prefixLen := int(opt[2])
+	onLink := opt[3]&0x80 != 0
+	autonomous := opt[3]&0x40 != 0
+	validLife := time.Duration(binary.BigEndian.Uint32(opt[4:8])) * time.Second
+	prefLife := time.Duration(binary.BigEndian.Uint32(opt[8:12])) * time.Second
+	prefix := net.IP(opt[16:32])
+
+	ri.Prefixes = append(ri.Prefixes, PrefixInfo{
+		Prefix:        fmt.Sprintf("%s/%d", prefix, prefixLen),
+		ValidLifetime: validLife,
+		PreferredLife: prefLife,
+		OnLink:        onLink,
+		Autonomous:    autonomous,
+	})
+}
+
+// parseRARouteInfo parses an RA Route Information option (type 24, RFC 4191).
+//
+//	Byte 2:    Prefix Length
+//	Byte 3:    Preference (bits 4-3): 00=medium, 01=high, 11=low
+//	Bytes 4-7: Route Lifetime (seconds)
+//	Bytes 8+:  Prefix (variable, padded to option boundary)
+func parseRARouteInfo(opt []byte, oLen int, ri *RouterInfo) {
+	prefixLen := int(opt[2])
+	pref := int((opt[3] >> 3) & 0x03)
+	lifetime := time.Duration(binary.BigEndian.Uint32(opt[4:8])) * time.Second
+
+	// Prefix bytes: remaining option bytes after the 8-byte header, up to 16 bytes
+	prefixBytes := make(net.IP, 16)
+	copyLen := oLen - 8
+	if copyLen > 16 {
+		copyLen = 16
+	}
+	if copyLen > 0 && 8+copyLen <= len(opt) {
+		copy(prefixBytes, opt[8:8+copyLen])
+	}
+
+	ri.Routes = append(ri.Routes, RouteInfo{
+		Prefix:     fmt.Sprintf("%s/%d", prefixBytes, prefixLen),
+		PrefixLen:  prefixLen,
+		Preference: pref,
+		Lifetime:   lifetime,
+	})
+}
+
+// parseRARDNSS parses an RA RDNSS option (type 25, RFC 6106).
+//
+//	Bytes 4-7: Lifetime (seconds)
+//	Bytes 8+:  DNS server addresses (16 bytes each)
+func parseRARDNSS(opt []byte, oLen int, ri *RouterInfo) {
+	// Each address is 16 bytes, starting at offset 8
+	for off := 8; off+16 <= oLen && off+16 <= len(opt); off += 16 {
+		addr := net.IP(opt[off : off+16])
+		ri.RDNSS = append(ri.RDNSS, addr.String())
+	}
+}
+
 func parseMLDv2Groups(buf []byte) []string {
 	// Need at least: 4 (ICMPv6 header) + 4 (reserved + count) = 8
 	if len(buf) < 8 {

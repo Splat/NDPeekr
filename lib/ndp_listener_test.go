@@ -1,8 +1,10 @@
 package lib
 
 import (
+	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 
 	"golang.org/x/net/ipv6"
 )
@@ -399,5 +401,301 @@ func TestParseMLDGroups_TruncatedMLDv2(t *testing.T) {
 	got := parseMLDGroups(buf)
 	if len(got) != 0 {
 		t.Fatalf("parseMLDGroups(truncated v2) returned %d groups, want 0", len(got))
+	}
+}
+
+// --- Router Advertisement parsing tests ---
+
+// buildRAFull constructs an RA packet with header fields and optional NDP options.
+// Returns the raw ICMPv6 bytes.
+func buildRAFull(hopLimit byte, managed, other bool, lifetime uint16, srcMAC net.HardwareAddr, options ...[]byte) []byte {
+	// RA header: type(1) + code(1) + checksum(2) + hopLimit(1) + flags(1) + lifetime(2) + reachable(4) + retrans(4) = 16 bytes
+	buf := make([]byte, 16)
+	buf[0] = 134 // RA type
+	buf[4] = hopLimit
+	if managed {
+		buf[5] |= 0x80
+	}
+	if other {
+		buf[5] |= 0x40
+	}
+	binary.BigEndian.PutUint16(buf[6:8], lifetime)
+
+	// Add Source Link-Layer Address option if MAC provided
+	if len(srcMAC) == 6 {
+		opt := make([]byte, 8)
+		opt[0] = 1 // Source LLA
+		opt[1] = 1 // 8 bytes
+		copy(opt[2:8], srcMAC)
+		buf = append(buf, opt...)
+	}
+
+	// Append additional options
+	for _, opt := range options {
+		buf = append(buf, opt...)
+	}
+
+	return buf
+}
+
+// buildPrefixInfoOption constructs a Prefix Information option (type 3, 32 bytes).
+func buildPrefixInfoOption(prefix net.IP, prefixLen byte, onLink, autonomous bool, validLife, prefLife uint32) []byte {
+	opt := make([]byte, 32)
+	opt[0] = 3  // type
+	opt[1] = 4  // length: 32/8 = 4
+	opt[2] = prefixLen
+	if onLink {
+		opt[3] |= 0x80
+	}
+	if autonomous {
+		opt[3] |= 0x40
+	}
+	binary.BigEndian.PutUint32(opt[4:8], validLife)
+	binary.BigEndian.PutUint32(opt[8:12], prefLife)
+	copy(opt[16:32], prefix.To16())
+	return opt
+}
+
+// buildMTUOption constructs an MTU option (type 5, 8 bytes).
+func buildMTUOption(mtu uint32) []byte {
+	opt := make([]byte, 8)
+	opt[0] = 5 // type
+	opt[1] = 1 // length: 8/8 = 1
+	binary.BigEndian.PutUint32(opt[4:8], mtu)
+	return opt
+}
+
+// buildRDNSSOption constructs an RDNSS option (type 25) with DNS server addresses.
+func buildRDNSSOption(lifetime uint32, servers ...net.IP) []byte {
+	// Header: type(1) + len(1) + reserved(2) + lifetime(4) + addresses(16 each)
+	optLen := 8 + len(servers)*16
+	// Length field is in 8-byte units; round up
+	lenField := optLen / 8
+	opt := make([]byte, lenField*8)
+	opt[0] = 25 // type
+	opt[1] = byte(lenField)
+	binary.BigEndian.PutUint32(opt[4:8], lifetime)
+	for i, srv := range servers {
+		copy(opt[8+i*16:8+(i+1)*16], srv.To16())
+	}
+	return opt
+}
+
+// buildRouteInfoOption constructs a Route Information option (type 24).
+func buildRouteInfoOption(prefix net.IP, prefixLen byte, pref byte, lifetime uint32) []byte {
+	// Determine option length based on prefix length
+	// 0: 8 bytes, 1-64: 16 bytes, 65-128: 24 bytes
+	var optSize int
+	if prefixLen == 0 {
+		optSize = 8
+	} else if prefixLen <= 64 {
+		optSize = 16
+	} else {
+		optSize = 24
+	}
+	opt := make([]byte, optSize)
+	opt[0] = 24 // type
+	opt[1] = byte(optSize / 8)
+	opt[2] = prefixLen
+	opt[3] = (pref & 0x03) << 3 // preference in bits 4-3
+	binary.BigEndian.PutUint32(opt[4:8], lifetime)
+	if optSize > 8 && prefix != nil {
+		p := prefix.To16()
+		copyLen := optSize - 8
+		if copyLen > 16 {
+			copyLen = 16
+		}
+		copy(opt[8:8+copyLen], p[:copyLen])
+	}
+	return opt
+}
+
+func TestParseRA_BasicFields(t *testing.T) {
+	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}
+	buf := buildRAFull(64, true, true, 1800, mac)
+
+	ri := parseRA(buf, "fe80::1", "aa:bb:cc:dd:ee:01", 255, "en0")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+	if ri.Address != "fe80::1" {
+		t.Errorf("Address = %q, want %q", ri.Address, "fe80::1")
+	}
+	if ri.MAC != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("MAC = %q", ri.MAC)
+	}
+	if ri.HopLimit != 64 {
+		t.Errorf("HopLimit = %d, want 64", ri.HopLimit)
+	}
+	if !ri.Managed {
+		t.Error("Managed should be true")
+	}
+	if !ri.Other {
+		t.Error("Other should be true")
+	}
+	if ri.Lifetime != 1800*time.Second {
+		t.Errorf("Lifetime = %v, want 1800s", ri.Lifetime)
+	}
+	if ri.Interface != "en0" {
+		t.Errorf("Interface = %q, want %q", ri.Interface, "en0")
+	}
+}
+
+func TestParseRA_PrefixInfo(t *testing.T) {
+	prefix := net.ParseIP("2001:db8::")
+	prefixOpt := buildPrefixInfoOption(prefix, 64, true, true, 86400, 14400)
+	buf := buildRAFull(64, false, false, 1800, nil, prefixOpt)
+
+	ri := parseRA(buf, "fe80::1", "", 0, "")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+	if len(ri.Prefixes) != 1 {
+		t.Fatalf("Prefixes = %d, want 1", len(ri.Prefixes))
+	}
+	p := ri.Prefixes[0]
+	if p.Prefix != "2001:db8::/64" {
+		t.Errorf("Prefix = %q, want %q", p.Prefix, "2001:db8::/64")
+	}
+	if !p.OnLink {
+		t.Error("OnLink should be true")
+	}
+	if !p.Autonomous {
+		t.Error("Autonomous should be true")
+	}
+	if p.ValidLifetime != 86400*time.Second {
+		t.Errorf("ValidLifetime = %v, want 86400s", p.ValidLifetime)
+	}
+	if p.PreferredLife != 14400*time.Second {
+		t.Errorf("PreferredLife = %v, want 14400s", p.PreferredLife)
+	}
+}
+
+func TestParseRA_MTU(t *testing.T) {
+	mtuOpt := buildMTUOption(9000)
+	buf := buildRAFull(64, false, false, 1800, nil, mtuOpt)
+
+	ri := parseRA(buf, "fe80::1", "", 0, "")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+	if ri.MTU != 9000 {
+		t.Errorf("MTU = %d, want 9000", ri.MTU)
+	}
+}
+
+func TestParseRA_RDNSS(t *testing.T) {
+	dns1 := net.ParseIP("2001:db8::53")
+	dns2 := net.ParseIP("2001:db8::54")
+	rdnssOpt := buildRDNSSOption(3600, dns1, dns2)
+	buf := buildRAFull(64, false, false, 1800, nil, rdnssOpt)
+
+	ri := parseRA(buf, "fe80::1", "", 0, "")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+	if len(ri.RDNSS) != 2 {
+		t.Fatalf("RDNSS = %d servers, want 2", len(ri.RDNSS))
+	}
+	if ri.RDNSS[0] != "2001:db8::53" {
+		t.Errorf("RDNSS[0] = %q, want %q", ri.RDNSS[0], "2001:db8::53")
+	}
+	if ri.RDNSS[1] != "2001:db8::54" {
+		t.Errorf("RDNSS[1] = %q, want %q", ri.RDNSS[1], "2001:db8::54")
+	}
+}
+
+func TestParseRA_RouteInfo(t *testing.T) {
+	prefix := net.ParseIP("2001:db8:1::")
+	routeOpt := buildRouteInfoOption(prefix, 48, 1, 7200) // high preference
+	buf := buildRAFull(64, false, false, 1800, nil, routeOpt)
+
+	ri := parseRA(buf, "fe80::1", "", 0, "")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+	if len(ri.Routes) != 1 {
+		t.Fatalf("Routes = %d, want 1", len(ri.Routes))
+	}
+	rt := ri.Routes[0]
+	if rt.PrefixLen != 48 {
+		t.Errorf("PrefixLen = %d, want 48", rt.PrefixLen)
+	}
+	if rt.Preference != 1 {
+		t.Errorf("Preference = %d, want 1 (high)", rt.Preference)
+	}
+	if rt.Lifetime != 7200*time.Second {
+		t.Errorf("Lifetime = %v, want 7200s", rt.Lifetime)
+	}
+}
+
+func TestParseRA_AllOptions(t *testing.T) {
+	mac := net.HardwareAddr{0x02, 0x42, 0xac, 0x11, 0x00, 0x01}
+	prefixOpt := buildPrefixInfoOption(net.ParseIP("2001:db8::"), 64, true, true, 86400, 14400)
+	mtuOpt := buildMTUOption(1500)
+	rdnssOpt := buildRDNSSOption(3600, net.ParseIP("2001:db8::53"))
+	routeOpt := buildRouteInfoOption(net.ParseIP("2001:db8:1::"), 48, 0, 3600)
+
+	buf := buildRAFull(64, true, true, 1800, mac, prefixOpt, mtuOpt, rdnssOpt, routeOpt)
+
+	ri := parseRA(buf, "fe80::1", "02:42:ac:11:00:01", 255, "en0")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+
+	if ri.HopLimit != 64 {
+		t.Errorf("HopLimit = %d", ri.HopLimit)
+	}
+	if !ri.Managed || !ri.Other {
+		t.Error("M and O flags should be set")
+	}
+	if ri.Lifetime != 1800*time.Second {
+		t.Errorf("Lifetime = %v", ri.Lifetime)
+	}
+	if len(ri.Prefixes) != 1 {
+		t.Errorf("Prefixes = %d", len(ri.Prefixes))
+	}
+	if ri.MTU != 1500 {
+		t.Errorf("MTU = %d", ri.MTU)
+	}
+	if len(ri.RDNSS) != 1 {
+		t.Errorf("RDNSS = %d", len(ri.RDNSS))
+	}
+	if len(ri.Routes) != 1 {
+		t.Errorf("Routes = %d", len(ri.Routes))
+	}
+}
+
+func TestParseRA_TooShort(t *testing.T) {
+	buf := []byte{134, 0, 0, 0} // Only 4 bytes, need 16
+	ri := parseRA(buf, "fe80::1", "", 0, "")
+	if ri != nil {
+		t.Fatal("parseRA should return nil for too-short packet")
+	}
+}
+
+func TestParseRA_NoOptions(t *testing.T) {
+	// Minimal RA: 16 bytes, no options
+	buf := make([]byte, 16)
+	buf[0] = 134
+	buf[4] = 128 // hop limit
+	buf[5] = 0xC0 // M + O
+	binary.BigEndian.PutUint16(buf[6:8], 600)
+
+	ri := parseRA(buf, "fe80::1", "", 0, "")
+	if ri == nil {
+		t.Fatal("parseRA returned nil")
+	}
+	if ri.HopLimit != 128 {
+		t.Errorf("HopLimit = %d, want 128", ri.HopLimit)
+	}
+	if !ri.Managed || !ri.Other {
+		t.Error("M and O should be set")
+	}
+	if ri.Lifetime != 600*time.Second {
+		t.Errorf("Lifetime = %v, want 600s", ri.Lifetime)
+	}
+	if len(ri.Prefixes) != 0 {
+		t.Errorf("Prefixes = %d, want 0", len(ri.Prefixes))
 	}
 }
