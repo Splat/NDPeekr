@@ -284,6 +284,126 @@ func TestRecordMAC_NoMessageYet(t *testing.T) {
 	}
 }
 
+func TestRecordRouter(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	now := time.Now()
+	stats.RecordRouter(RouterInfo{
+		Address:  "fe80::1",
+		MAC:      "aa:bb:cc:dd:ee:01",
+		HopLimit: 64,
+		Lifetime: 1800 * time.Second,
+		Managed:  true,
+		Other:    false,
+		MTU:      1500,
+		Prefixes: []PrefixInfo{
+			{Prefix: "2001:db8::/64", ValidLifetime: 86400 * time.Second, PreferredLife: 14400 * time.Second, OnLink: true, Autonomous: true},
+		},
+		RDNSS:     []string{"2001:db8::53"},
+		Interface: "en0",
+		LastSeen:  now,
+	})
+
+	routers := stats.GetRouters()
+	if len(routers) != 1 {
+		t.Fatalf("GetRouters() returned %d, want 1", len(routers))
+	}
+	r := routers[0]
+	if r.Address != "fe80::1" {
+		t.Errorf("Address = %q, want %q", r.Address, "fe80::1")
+	}
+	if r.MAC != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("MAC = %q, want %q", r.MAC, "aa:bb:cc:dd:ee:01")
+	}
+	if !r.Managed {
+		t.Error("Managed should be true")
+	}
+	if r.Other {
+		t.Error("Other should be false")
+	}
+	if r.MTU != 1500 {
+		t.Errorf("MTU = %d, want 1500", r.MTU)
+	}
+	if len(r.Prefixes) != 1 {
+		t.Fatalf("Prefixes = %d, want 1", len(r.Prefixes))
+	}
+	if r.Prefixes[0].Prefix != "2001:db8::/64" {
+		t.Errorf("Prefix = %q, want %q", r.Prefixes[0].Prefix, "2001:db8::/64")
+	}
+	if len(r.RDNSS) != 1 || r.RDNSS[0] != "2001:db8::53" {
+		t.Errorf("RDNSS = %v, want [2001:db8::53]", r.RDNSS)
+	}
+	if r.FirstSeen.IsZero() {
+		t.Error("FirstSeen should be set")
+	}
+}
+
+func TestRecordRouterUpdate(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	first := time.Now()
+	stats.RecordRouter(RouterInfo{
+		Address:  "fe80::1",
+		MAC:      "aa:bb:cc:dd:ee:01",
+		Lifetime: 1800 * time.Second,
+		Managed:  false,
+		LastSeen: first,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+	second := time.Now()
+	stats.RecordRouter(RouterInfo{
+		Address:  "fe80::1",
+		MAC:      "aa:bb:cc:dd:ee:02",
+		Lifetime: 900 * time.Second,
+		Managed:  true,
+		MTU:      9000,
+		LastSeen: second,
+	})
+
+	routers := stats.GetRouters()
+	if len(routers) != 1 {
+		t.Fatalf("GetRouters() returned %d, want 1", len(routers))
+	}
+	r := routers[0]
+	// FirstSeen should be preserved from first recording
+	if r.FirstSeen.After(first) {
+		t.Errorf("FirstSeen should be from first recording")
+	}
+	// Other fields should be updated
+	if r.MAC != "aa:bb:cc:dd:ee:02" {
+		t.Errorf("MAC = %q, want updated value", r.MAC)
+	}
+	if r.Lifetime != 900*time.Second {
+		t.Errorf("Lifetime = %v, want 900s", r.Lifetime)
+	}
+	if !r.Managed {
+		t.Error("Managed should be updated to true")
+	}
+	if r.MTU != 9000 {
+		t.Errorf("MTU = %d, want 9000", r.MTU)
+	}
+}
+
+func TestGetRoutersSortedByLastSeen(t *testing.T) {
+	stats := NewNDPStats(5 * time.Minute)
+
+	t1 := time.Now()
+	stats.RecordRouter(RouterInfo{Address: "fe80::1", LastSeen: t1})
+	time.Sleep(10 * time.Millisecond)
+	t2 := time.Now()
+	stats.RecordRouter(RouterInfo{Address: "fe80::2", LastSeen: t2})
+
+	routers := stats.GetRouters()
+	if len(routers) != 2 {
+		t.Fatalf("GetRouters() returned %d, want 2", len(routers))
+	}
+	// Most recently seen should be first
+	if routers[0].Address != "fe80::2" {
+		t.Errorf("First router = %q, want fe80::2 (most recent)", routers[0].Address)
+	}
+}
+
 func TestFirstSeenLastSeen(t *testing.T) {
 	stats := NewNDPStats(5 * time.Minute)
 

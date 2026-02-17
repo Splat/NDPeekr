@@ -6,11 +6,12 @@ import (
 	"time"
 )
 
-// NDPStats tracks all observed NDP peers with thread-safe access
+// NDPStats tracks all observed NDP peers and routers with thread-safe access
 type NDPStats struct {
-	mu     sync.RWMutex
-	peers  map[string]*PeerStats // key: IPv6 address string
-	window time.Duration         // sliding window size (timeout)
+	mu      sync.RWMutex
+	peers   map[string]*PeerStats  // key: IPv6 address string
+	routers map[string]*RouterInfo // key: router link-local IPv6 address
+	window  time.Duration          // sliding window size (timeout)
 }
 
 // PeerStats holds per-peer statistics
@@ -43,11 +44,46 @@ type PeerSummary struct {
 	Interface string   // most recent network interface name
 }
 
+// PrefixInfo holds prefix data extracted from RA Prefix Information options.
+type PrefixInfo struct {
+	Prefix        string        // e.g. "2001:db8::/64"
+	ValidLifetime time.Duration // valid lifetime
+	PreferredLife time.Duration // preferred lifetime
+	OnLink        bool          // L flag: prefix can be used for on-link determination
+	Autonomous    bool          // A flag: prefix can be used for SLAAC
+}
+
+// RouteInfo holds route data extracted from RA Route Information options (RFC 4191).
+type RouteInfo struct {
+	Prefix     string        // e.g. "2001:db8:1::/48"
+	PrefixLen  int
+	Preference int           // 0=medium, 1=high, 3=low
+	Lifetime   time.Duration
+}
+
+// RouterInfo holds data extracted from Router Advertisement messages.
+type RouterInfo struct {
+	Address   string        // router link-local IPv6
+	MAC       string        // from Source Link-Layer Address option
+	HopLimit  int           // cur hop limit field from RA
+	Lifetime  time.Duration // router lifetime
+	Managed   bool          // M flag: DHCPv6 for addresses
+	Other     bool          // O flag: DHCPv6 for other config
+	MTU       uint32        // from MTU option (0 if absent)
+	Prefixes  []PrefixInfo  // from Prefix Information options
+	RDNSS     []string      // DNS server addresses from RDNSS option
+	Routes    []RouteInfo   // from Route Information options
+	Interface string        // network interface name
+	FirstSeen time.Time
+	LastSeen  time.Time
+}
+
 // NewNDPStats creates a new NDPStats tracker with the given sliding window duration.
 func NewNDPStats(window time.Duration) *NDPStats {
 	return &NDPStats{
-		peers:  make(map[string]*PeerStats),
-		window: window,
+		peers:   make(map[string]*PeerStats),
+		routers: make(map[string]*RouterInfo),
+		window:  window,
 	}
 }
 
@@ -208,4 +244,49 @@ func (s *NDPStats) Prune() {
 // Window returns the configured sliding window duration.
 func (s *NDPStats) Window() time.Duration {
 	return s.window
+}
+
+// RecordRouter records or updates a router from an RA message.
+// On first observation, FirstSeen is set. On subsequent observations, all fields
+// except FirstSeen are updated to reflect the latest RA.
+func (s *NDPStats) RecordRouter(info RouterInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.routers[info.Address]
+	if !ok {
+		info.FirstSeen = info.LastSeen
+		copied := info
+		s.routers[info.Address] = &copied
+		return
+	}
+
+	existing.MAC = info.MAC
+	existing.HopLimit = info.HopLimit
+	existing.Lifetime = info.Lifetime
+	existing.Managed = info.Managed
+	existing.Other = info.Other
+	existing.MTU = info.MTU
+	existing.Prefixes = info.Prefixes
+	existing.RDNSS = info.RDNSS
+	existing.Routes = info.Routes
+	existing.Interface = info.Interface
+	existing.LastSeen = info.LastSeen
+}
+
+// GetRouters returns a snapshot of all observed routers, sorted by last seen descending.
+func (s *NDPStats) GetRouters() []RouterInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]RouterInfo, 0, len(s.routers))
+	for _, r := range s.routers {
+		result = append(result, *r)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].LastSeen.After(result[j].LastSeen)
+	})
+
+	return result
 }
