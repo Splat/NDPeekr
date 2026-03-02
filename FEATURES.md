@@ -39,7 +39,7 @@ NDP Neighbor Solicitation and Neighbor Advertisement messages contain a Source/T
 ---
 
 ### 2. Router Tracking Table
-
+```
 **Priority:** High
 **Complexity:** Medium
 **Status:** Ready to implement
@@ -67,7 +67,7 @@ Router Advertisement messages contain rich information that deserves dedicated t
 - Detect rogue router advertisements (security)
 - Understand network configuration (SLAAC vs DHCPv6)
 - Track advertised prefixes for subnet enumeration
-
+```
 ---
 
 ### 3. SLAAC vs DHCPv6 Detection
