@@ -107,21 +107,116 @@ sudo ./NDPeekr --iface en0 --window 10m --refresh 1s --log-level info
 
 ## Output
 
-NDPeekr displays a table like:
+NDPeekr runs as a full-screen TUI with two tabs. Use `Tab` to switch between them. Press `q` to quit. Press `Enter` to view details for a specific row. Up/down arrow keys navigate the table.
+
+### NDP/MLD Peers tab
 
 ```
-NDP Statistics (window: 15m, updated: 14:32:15)
-──────────────────────────────────────────────────────────────────────────────────────────────────────
-IPv6 Address                 RS    RA    NS    NA Redir   DAR   DAC  Total  First Seen  Last Seen
-──────────────────────────────────────────────────────────────────────────────────────────────────────
-fe80::1                      0    12     0     8     0     0     0     20  14:17:03    14:32:14
-fe80::a1b2:c3d4:e5f6:7890    3     0     5     5     0     0     0     13  14:20:45    14:31:58
-2001:db8::1234               0     0     2     2     0     0     0      4  14:28:12    14:30:22
-──────────────────────────────────────────────────────────────────────────────────────────────────────
-Total peers: 3
+NDP/MLD Statistics (window: 15m, updated: 14:32:15)
+
+[ NDP/MLD Peers ]    Routers
+
+ IPv6 Address                              MAC               HL  Iface       RS  RA  NS  NA  Rdr DAR DAC  MQ  MR  MD  Total First    Last
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ fe80::1                                   aa:bb:cc:dd:ee:ff  64  en0          0  12   0   8    0   0   0   3   1   0     24  14:17:03 14:32:14
+▶fe80::a1b2:c3d4:e5f6:7890                 11:22:33:44:55:66  64  en0          3   0   5   5    0   0   0   0   2   0     15  14:20:45 14:31:58
+ 2001:db8:cafe::1                          -                   -  en0          0   0   2   2    0   0   0   1   0   0      5  14:28:12 14:30:22
+ ff02::1:ff1a:2b3c                         -                   -  en0          0   0   0   0    0   0   0   8   0   0      8  14:22:00 14:32:10
+ ff02::16                                  -                   -  en0          0   0   0   0    0   0   0   0   4   0      4  14:17:05 14:30:55
+
+Total peers: 5
+
+Multicast Groups:
+  ff02::1                                    All Nodes        5 hosts
+  ff02::1:ff1a:2b3c                          Solicited-Node   3 hosts
+  ff02::16                                   MLDv2            2 hosts
+  ff02::2                                    All Routers      1 host
+
+↑/↓: navigate  Enter: details  Tab: switch view  q: quit
+```
+
+### Routers tab
+
+```
+NDP/MLD Statistics (window: 15m, updated: 14:32:15)
+
+  NDP/MLD Peers    [ Routers ]
+
+ Router Address                             MAC               Life   Hop M O Pfx MTU   DNS Iface      Last
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+▶fe80::1                                    aa:bb:cc:dd:ee:ff  30m     64 N N   2  1500   1 en0        14:32:14
+
+Total routers: 1
+
+↑/↓: navigate  Enter: details  Tab: switch view  q: quit
+```
+
+### Peer detail view (press Enter on a row)
+
+```
+NDP/MLD Statistics (window: 15m, updated: 14:32:15)
+
+  NDP/MLD Peers    Routers
+
+Peer Detail: fe80::a1b2:c3d4:e5f6:7890
+
+  MAC:        11:22:33:44:55:66
+  Hop Limit:  64
+  Interface:  en0
+  First Seen: 14:20:45
+  Last Seen:  14:31:58
+
+  Message Counts:
+    RS       3    RA       0    NS       5    NA       5    Rdr      0    DAR      0    DAC      0
+    MQ       0    MR       2    MD       0
+
+  Total:  15
+
+  Multicast Groups:
+    ff02::1:ffc3:d4e5                         Solicited-Node
+    ff02::1                                   All Nodes
+
+Esc: back  q: quit
+```
+
+### Router detail view (press Enter on a router row)
+
+```
+NDP/MLD Statistics (window: 15m, updated: 14:32:15)
+
+  NDP/MLD Peers    [ Routers ]
+
+Router Detail: fe80::1
+
+  MAC:        aa:bb:cc:dd:ee:ff
+  Interface:  en0
+  Hop Limit:  64
+  First Seen: 14:17:03
+  Last Seen:  14:32:14
+
+  Router Advertisement:
+    Lifetime:      30m
+    Managed (M):   No
+    Other (O):     No
+    MTU:           1500
+
+  Prefixes:
+    Prefix                                    Valid     Pref      L  A
+    2001:db8:cafe::/64                        24h       4h        Y  Y
+
+  DNS Servers (RDNSS):
+    2001:db8::53
+
+  Routes:
+    Prefix                                    Lifetime  Pref
+    ::/0                                      30m       med
+
+Esc: back  q: quit
 ```
 
 ## Message Types
+
+### NDP (Neighbor Discovery Protocol)
 
 | Abbreviation | Full Name                      | Description                                       |
 |--------------|--------------------------------|---------------------------------------------------|
@@ -129,6 +224,14 @@ Total peers: 3
 | RA           | Router Advertisement           | Router announcing its presence and network config |
 | NS           | Neighbor Solicitation          | Address resolution (like ARP for IPv6)            |
 | NA           | Neighbor Advertisement         | Response to NS with link-layer address            |
-| Redir        | Redirect                       | Router informing host of better first-hop         |
+| Rdr          | Redirect                       | Router informing host of better first-hop         |
 | DAR          | Duplicate Address Request      | DAD probe (RFC 6775)                              |
 | DAC          | Duplicate Address Confirmation | DAD response (RFC 6775)                           |
+
+### MLD (Multicast Listener Discovery)
+
+| Abbreviation | Full Name         | Description                                          |
+|--------------|-------------------|------------------------------------------------------|
+| MQ           | MLD Query         | Router querying for multicast group membership       |
+| MR           | MLD Report        | Host reporting multicast group membership (v1 or v2) |
+| MD           | MLD Done          | Host leaving a multicast group                       |
