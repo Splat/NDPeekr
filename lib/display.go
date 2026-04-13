@@ -372,9 +372,14 @@ func (m Model) renderDetail() string {
 	if iface == "" {
 		iface = "-"
 	}
+	osType := p.GuessedOS
+	if osType == "" {
+		osType = "Unknown"
+	}
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("MAC:"), mac))
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Hop Limit:"), hl))
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Interface:"), iface))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("OS/Type:"), osType))
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("First Seen:"), formatTimestamp(p.FirstSeen)))
 	b.WriteString(fmt.Sprintf("  %s  %s\n", detailLabel.Render("Last Seen:"), formatTimestamp(p.LastSeen)))
 
@@ -425,6 +430,7 @@ func newPeerTable() table.Model {
 		{Title: "MAC", Width: 17},
 		{Title: "HL", Width: 3},
 		{Title: "Iface", Width: 10},
+		{Title: "Type", Width: 11},
 		{Title: "RS", Width: 4},
 		{Title: "RA", Width: 4},
 		{Title: "NS", Width: 4},
@@ -513,11 +519,16 @@ func peerRows(peers []PeerSummary) []table.Row {
 		if iface == "" {
 			iface = "-"
 		}
+		osType := p.GuessedOS
+		if osType == "" {
+			osType = "-"
+		}
 		row := table.Row{
 			p.Address,
 			mac,
 			hl,
 			iface,
+			osType,
 		}
 		for _, kind := range msgColumnOrder {
 			row = append(row, fmt.Sprintf("%d", p.Counts[kind]))
