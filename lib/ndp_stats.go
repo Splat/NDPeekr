@@ -42,6 +42,47 @@ type PeerSummary struct {
 	MAC       string   // link-layer address (if observed)
 	HopLimit  int      // most recent IPv6 hop limit
 	Interface string   // most recent network interface name
+	GuessedOS string   // inferred OS/device type from MLD group memberships
+}
+
+// GuessOS infers the likely OS or device type from MLD multicast group memberships.
+// Groups are the multicast addresses a peer has reported joining.
+// Returns a human-readable label or "" if nothing can be inferred.
+func GuessOS(groups []string) string {
+	hasMDNS := false   // ff02::fb — Bonjour/Avahi (macOS, Linux, IoT)
+	hasLLMNR := false  // ff02::1:3 — Windows
+	hasSSDPUPnP := false // ff02::c  — IoT / smart home / media
+	isRouter := false  // ff02::2  — acting as a router
+
+	for _, g := range groups {
+		switch g {
+		case "ff02::fb":
+			hasMDNS = true
+		case "ff02::1:3":
+			hasLLMNR = true
+		case "ff02::c":
+			hasSSDPUPnP = true
+		case "ff02::2":
+			isRouter = true
+		}
+	}
+
+	switch {
+	case isRouter:
+		return "Router"
+	case hasLLMNR && hasMDNS:
+		return "Windows"
+	case hasLLMNR:
+		return "Windows"
+	case hasSSDPUPnP && !hasMDNS:
+		return "IoT/UPnP"
+	case hasMDNS && hasSSDPUPnP:
+		return "macOS/Linux"
+	case hasMDNS:
+		return "macOS/Linux"
+	default:
+		return ""
+	}
 }
 
 // PrefixInfo holds prefix data extracted from RA Prefix Information options.
@@ -189,6 +230,8 @@ func (s *NDPStats) GetStats() []PeerSummary {
 			}
 		}
 		sort.Strings(summary.Groups)
+
+		summary.GuessedOS = GuessOS(summary.Groups)
 
 		summaries = append(summaries, summary)
 	}
