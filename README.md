@@ -5,10 +5,13 @@ A lightweight Go tool for passive IPv6 network discovery through NDP (Neighbor D
 
 ## What It Does
 
-NDPeekr listens for ICMPv6 NDP messages and displays a rolling summary table showing:
+NDPeekr listens for ICMPv6 NDP and MLD messages and displays a rolling two-tab TUI showing:
 
-- All unique IPv6 addresses observed
-- Message counts by type (Router Solicitation, Router Advertisement, Neighbor Solicitation, Neighbor Advertisement, Redirect, DAD)
+- All unique IPv6 addresses observed, with per-type message counts (RS, RA, NS, NA, Redirect, DAR, DAC, MLD Query/Report/Done)
+- MAC address and hop limit extracted from NDP options
+- Inferred OS/device type based on MLD multicast group memberships (macOS/Linux, Windows, IoT/UPnP, Router)
+- Active multicast group memberships per peer, with a cross-peer group summary
+- Router Advertisement details: lifetime, DHCPv6 flags, advertised prefixes (with SLAAC/on-link flags and lifetimes), RDNSS DNS servers, and RFC 4191 route information
 - First and last seen timestamps
 - Automatic timeout of stale entries via configurable sliding window
 
@@ -116,13 +119,13 @@ NDP/MLD Statistics (window: 15m, updated: 14:32:15)
 
 [ NDP/MLD Peers ]    Routers
 
- IPv6 Address                              MAC               HL  Iface       RS  RA  NS  NA  Rdr DAR DAC  MQ  MR  MD  Total First    Last
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- fe80::1                                   aa:bb:cc:dd:ee:ff  64  en0          0  12   0   8    0   0   0   3   1   0     24  14:17:03 14:32:14
-▶fe80::a1b2:c3d4:e5f6:7890                 11:22:33:44:55:66  64  en0          3   0   5   5    0   0   0   0   2   0     15  14:20:45 14:31:58
- 2001:db8:cafe::1                          -                   -  en0          0   0   2   2    0   0   0   1   0   0      5  14:28:12 14:30:22
- ff02::1:ff1a:2b3c                         -                   -  en0          0   0   0   0    0   0   0   8   0   0      8  14:22:00 14:32:10
- ff02::16                                  -                   -  en0          0   0   0   0    0   0   0   0   4   0      4  14:17:05 14:30:55
+ IPv6 Address                              MAC               HL  Iface      Type        RS  RA  NS  NA  Rdr DAR DAC  MQ  MR  MD  Total First    Last
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ fe80::1                                   aa:bb:cc:dd:ee:ff  64  en0        Router       0  12   0   8    0   0   0   3   1   0     24  14:17:03 14:32:14
+▶fe80::a1b2:c3d4:e5f6:7890                 11:22:33:44:55:66  64  en0        macOS/Linux  3   0   5   5    0   0   0   0   2   0     15  14:20:45 14:31:58
+ 2001:db8:cafe::1                          -                   -  en0        -            0   0   2   2    0   0   0   1   0   0      5  14:28:12 14:30:22
+ ff02::1:ff1a:2b3c                         -                   -  en0        -            0   0   0   0    0   0   0   8   0   0      8  14:22:00 14:32:10
+ ff02::16                                  -                   -  en0        -            0   0   0   0    0   0   0   0   4   0      4  14:17:05 14:30:55
 
 Total peers: 5
 
@@ -163,6 +166,7 @@ Peer Detail: fe80::a1b2:c3d4:e5f6:7890
   MAC:        11:22:33:44:55:66
   Hop Limit:  64
   Interface:  en0
+  OS/Type:    macOS/Linux
   First Seen: 14:20:45
   Last Seen:  14:31:58
 
@@ -213,6 +217,61 @@ Router Detail: fe80::1
 
 Esc: back  q: quit
 ```
+
+## Column Reference
+
+### Peers Tab Columns
+
+| Column | Description |
+|--------|-------------|
+| IPv6 Address | Source IPv6 address of the observed peer |
+| MAC | Link-layer address extracted from NDP Source/Target Link-Layer Address options (`-` if not yet observed) |
+| HL | IPv6 hop limit observed in the packet header (`-` if unknown) |
+| Iface | Network interface the traffic was seen on |
+| Type | Inferred OS or device type based on MLD group memberships (see [OS/Type Inference](#ostype-inference)) |
+| RS | Router Solicitation count within the sliding window |
+| RA | Router Advertisement count within the sliding window |
+| NS | Neighbor Solicitation count within the sliding window |
+| NA | Neighbor Advertisement count within the sliding window |
+| Rdr | ICMPv6 Redirect count within the sliding window |
+| DAR | Duplicate Address Request count within the sliding window (RFC 6775) |
+| DAC | Duplicate Address Confirmation count within the sliding window (RFC 6775) |
+| MQ | MLD Query count within the sliding window |
+| MR | MLD Report count within the sliding window (v1 and v2 combined) |
+| MD | MLD Done count within the sliding window |
+| Total | Sum of all message type counts within the sliding window |
+| First | Time the address was first observed (HH:MM:SS) |
+| Last | Time the most recent message was observed (HH:MM:SS) |
+
+### Routers Tab Columns
+
+| Column | Description |
+|--------|-------------|
+| Router Address | Link-local IPv6 address of the advertising router |
+| MAC | Link-layer address from the Source Link-Layer Address option in RA |
+| Life | Router lifetime from the Router Advertisement (how long this router is valid as a default gateway) |
+| Hop | Current hop limit advertised in the RA (recommended TTL for outgoing packets) |
+| M | Managed address configuration flag — `Y` means hosts should use DHCPv6 for address assignment |
+| O | Other configuration flag — `Y` means hosts should use DHCPv6 for other config (DNS, NTP, etc.) even if addresses are SLAAC |
+| Pfx | Number of Prefix Information options in the RA (advertised on-link / SLAAC prefixes) |
+| MTU | Link MTU from the MTU option (`-` if not advertised) |
+| DNS | Number of RDNSS (Recursive DNS Server) addresses advertised in the RA |
+| Iface | Network interface the RA was received on |
+| Last Seen | Time the most recent RA from this router was observed |
+
+## OS/Type Inference
+
+NDPeekr infers the likely OS or device type from the MLD multicast groups a peer has reported joining. This is a heuristic based on well-known protocol group memberships:
+
+| Inferred Type | Signal |
+|---------------|--------|
+| Router | Peer has joined `ff02::2` (All Routers) |
+| Windows | Peer has joined `ff02::1:3` (LLMNR) |
+| macOS/Linux | Peer has joined `ff02::fb` (mDNS/Bonjour) without LLMNR |
+| IoT/UPnP | Peer has joined `ff02::c` (SSDP/UPnP) without mDNS |
+| (blank) | Insufficient MLD data to make an inference |
+
+A peer is only shown in the Peers tab after it generates NDP/MLD traffic; the OS/Type field remains blank until MLD Report messages reveal group memberships. Peers that join both `ff02::fb` (mDNS) and `ff02::1:3` (LLMNR) are classified as Windows (Windows 10+ supports both protocols).
 
 ## Message Types
 
