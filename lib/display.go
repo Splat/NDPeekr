@@ -428,9 +428,6 @@ func newPeerTable() table.Model {
 	columns := []table.Column{
 		{Title: "IPv6 Address", Width: 40},
 		{Title: "MAC", Width: 17},
-		{Title: "HL", Width: 3},
-		{Title: "Iface", Width: 10},
-		{Title: "Type", Width: 11},
 		{Title: "RS", Width: 4},
 		{Title: "RA", Width: 4},
 		{Title: "NS", Width: 4},
@@ -444,6 +441,9 @@ func newPeerTable() table.Model {
 		{Title: "Total", Width: 5},
 		{Title: "First", Width: 8},
 		{Title: "Last", Width: 8},
+		{Title: "HL", Width: 3},
+		{Title: "Iface", Width: 10},
+		{Title: "Type", Width: 11},
 	}
 
 	s := table.DefaultStyles()
@@ -526,9 +526,6 @@ func peerRows(peers []PeerSummary) []table.Row {
 		row := table.Row{
 			p.Address,
 			mac,
-			hl,
-			iface,
-			osType,
 		}
 		for _, kind := range msgColumnOrder {
 			row = append(row, fmt.Sprintf("%d", p.Counts[kind]))
@@ -537,6 +534,9 @@ func peerRows(peers []PeerSummary) []table.Row {
 			fmt.Sprintf("%d", p.Total),
 			formatTimestamp(p.FirstSeen),
 			formatTimestamp(p.LastSeen),
+			hl,
+			iface,
+			osType,
 		)
 		rows = append(rows, row)
 	}

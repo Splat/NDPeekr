@@ -1,7 +1,7 @@
 # NDPeekr
 ![NDPPeekr](ndpeekr_logo.png)
 
-A lightweight Go tool for passive IPv6 network discovery through NDP (Neighbor Discovery Protocol) traffic monitoring. NDPeekr captures and aggregates NDP messages to build a real-time inventory of active IPv6 hosts on your network segment.
+A lightweight Go tool for passive IPv6 network discovery through NDP (Neighbor Discovery Protocol) traffic monitoring. NDPeekr captures and aggregates NDP messages to build a real-time inventory of active IPv6 hosts on your network segment. This probably isn't as interesting running at home as it is in a corporate environment, campus, or public wifi. It can be a useful tool for network administrators, security analysts, and incident responders to gain visibility into IPv6 host activity without relying on active scanning.
 
 ## What It Does
 
@@ -119,13 +119,13 @@ NDP/MLD Statistics (window: 15m, updated: 14:32:15)
 
 [ NDP/MLD Peers ]    Routers
 
- IPv6 Address                              MAC               HL  Iface      Type        RS  RA  NS  NA  Rdr DAR DAC  MQ  MR  MD  Total First    Last
+ IPv6 Address                              MAC               RS  RA  NS  NA  Rdr DAR DAC  MQ  MR  MD  Total First    Last    HL  Iface      Type
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- fe80::1                                   aa:bb:cc:dd:ee:ff  64  en0        Router       0  12   0   8    0   0   0   3   1   0     24  14:17:03 14:32:14
-▶fe80::a1b2:c3d4:e5f6:7890                 11:22:33:44:55:66  64  en0        macOS/Linux  3   0   5   5    0   0   0   0   2   0     15  14:20:45 14:31:58
- 2001:db8:cafe::1                          -                   -  en0        -            0   0   2   2    0   0   0   1   0   0      5  14:28:12 14:30:22
- ff02::1:ff1a:2b3c                         -                   -  en0        -            0   0   0   0    0   0   0   8   0   0      8  14:22:00 14:32:10
- ff02::16                                  -                   -  en0        -            0   0   0   0    0   0   0   0   4   0      4  14:17:05 14:30:55
+ fe80::1                                   aa:bb:cc:dd:ee:ff   0  12   0   8    0   0   0   3   1   0     24  14:17:03 14:32:14  64  en0        Router
+▶fe80::a1b2:c3d4:e5f6:7890                 11:22:33:44:55:66   3   0   5   5    0   0   0   0   2   0     15  14:20:45 14:31:58  64  en0        macOS/Linux
+ 2001:db8:cafe::1                          -                    0   0   2   2    0   0   0   1   0   0      5  14:28:12 14:30:22   -  en0        -
+ ff02::1:ff1a:2b3c                         -                    0   0   0   0    0   0   0   8   0   0      8  14:22:00 14:32:10   -  en0        -
+ ff02::16                                  -                    0   0   0   0    0   0   0   0   4   0      4  14:17:05 14:30:55   -  en0        -
 
 Total peers: 5
 
@@ -226,9 +226,6 @@ Esc: back  q: quit
 |--------|-------------|
 | IPv6 Address | Source IPv6 address of the observed peer |
 | MAC | Link-layer address extracted from NDP Source/Target Link-Layer Address options (`-` if not yet observed) |
-| HL | IPv6 hop limit observed in the packet header (`-` if unknown) |
-| Iface | Network interface the traffic was seen on |
-| Type | Inferred OS or device type based on MLD group memberships (see [OS/Type Inference](#ostype-inference)) |
 | RS | Router Solicitation count within the sliding window |
 | RA | Router Advertisement count within the sliding window |
 | NS | Neighbor Solicitation count within the sliding window |
@@ -242,6 +239,9 @@ Esc: back  q: quit
 | Total | Sum of all message type counts within the sliding window |
 | First | Time the address was first observed (HH:MM:SS) |
 | Last | Time the most recent message was observed (HH:MM:SS) |
+| HL | IPv6 hop limit observed in the packet header (`-` if unknown) |
+| Iface | Network interface the traffic was seen on |
+| Type | Inferred OS or device type based on MLD group memberships (see [OS/Type Inference](#ostype-inference)) |
 
 ### Routers Tab Columns
 
